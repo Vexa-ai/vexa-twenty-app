@@ -8,15 +8,15 @@ import { parseMeetingUrl } from 'src/lib/meeting-url';
 import { VexaClient } from 'src/lib/vexa-client';
 import { CallDispatchOutcome, CallPlatform } from 'src/objects/call.object';
 
-// Calendar mirror.
+// Calendar mirror + just-in-time bot dispatch.
 //
 // Every minute we walk the user's calendar (last 90d + future) and
 // ensure a Call row exists for each CalendarEvent. The Call's
 // dispatchOutcome reflects what we did about a Vexa bot:
 //
 //   PENDING       eligible (future + Meet URL + not cancelled),
-//                 awaiting next dispatch attempt
-//   SCHEDULED     bot dispatched, vexa_url valid
+//                 waiting for the dispatch window
+//   SCHEDULED     bot dispatched right at meeting start, vexa_url valid
 //   ERROR         dispatch attempted, Vexa API error — see dispatchReason
 //   NOT_ELIGIBLE  past, cancelled, or no Meet URL — see dispatchReason
 //
@@ -25,6 +25,11 @@ import { CallDispatchOutcome, CallPlatform } from 'src/objects/call.object';
 // polling is the only reliable hook.
 
 const PAST_WINDOW_MS = 90 * 24 * 60 * 60 * 1000; // last 90 days
+// Dispatch a bot only when the meeting is actually about to start.
+// Vexa's bot then waits in the meeting URL for participants. Earlier
+// dispatch wasted Vexa quota and reserved bots ahead of need.
+const DISPATCH_LEAD_MS = 60 * 1000; //  1 min before scheduledStart
+const DISPATCH_TAIL_MS = 5 * 60 * 1000; //  up to 5 min after start
 
 type CalEv = {
   id: string;
@@ -105,44 +110,66 @@ const handler = async (
   const now = new Date();
   const pastEdge = new Date(now.getTime() - PAST_WINDOW_MS);
 
-  // 1. Pull calendar events in window.
-  const eventsResp = (await client
-    .query({
-      calendarEvents: {
-        __args: {
-          filter: { startsAt: { gte: pastEdge.toISOString() } } as any,
-          first: 500,
-          orderBy: [{ startsAt: 'AscNullsLast' }] as any,
-        },
-        edges: {
-          node: {
-            id: true,
-            title: true,
-            startsAt: true,
-            endsAt: true,
-            isCanceled: true,
-            conferenceLink: { primaryLinkUrl: true } as any,
-            calendarEventParticipants: {
-              __args: { first: 50 } as any,
-              edges: {
-                node: {
-                  handle: true,
-                  personId: true,
-                  person: { id: true, companyId: true } as any,
-                } as any,
-              },
-            } as any,
+  // 1. Pull calendar events in window. Two queries because we want
+  //    *all* future events (sorted ASC, the soonest first) plus the
+  //    last-90d slice (sorted DESC, most recent first). One batched
+  //    query with `first: 500 ASC` would silently truncate today's
+  //    meetings when the workspace has >500 historical events.
+  const fetchEvents = async (
+    filter: Record<string, unknown>,
+    direction: 'AscNullsLast' | 'DescNullsLast',
+  ): Promise<CalEv[]> => {
+    const r = (await client
+      .query({
+        calendarEvents: {
+          __args: {
+            filter: filter as any,
+            first: 500,
+            orderBy: [{ startsAt: direction }] as any,
+          },
+          edges: {
+            node: {
+              id: true,
+              title: true,
+              startsAt: true,
+              endsAt: true,
+              isCanceled: true,
+              conferenceLink: { primaryLinkUrl: true } as any,
+              calendarEventParticipants: {
+                __args: { first: 50 } as any,
+                edges: {
+                  node: {
+                    handle: true,
+                    personId: true,
+                    person: { id: true, companyId: true } as any,
+                  } as any,
+                },
+              } as any,
+            },
           },
         },
-      },
-    } as any)
-    .catch((e: unknown) => {
-      console.warn('cron-dispatch: calendarEvents query failed:', e);
-      return null;
-    })) as any;
+      } as any)
+      .catch((e: unknown) => {
+        console.warn('cron-dispatch: calendarEvents query failed:', e);
+        return null;
+      })) as any;
+    return r?.calendarEvents?.edges?.map((e: any) => e.node) ?? [];
+  };
 
-  const events: CalEv[] =
-    eventsResp?.calendarEvents?.edges?.map((e: any) => e.node) ?? [];
+  const futureEvents = await fetchEvents(
+    { startsAt: { gte: now.toISOString() } },
+    'AscNullsLast',
+  );
+  const pastEvents = await fetchEvents(
+    {
+      and: [
+        { startsAt: { gte: pastEdge.toISOString() } },
+        { startsAt: { lt: now.toISOString() } },
+      ],
+    },
+    'DescNullsLast',
+  );
+  const events: CalEv[] = [...futureEvents, ...pastEvents];
 
   // 2. Pull existing Calls keyed by calendarEventId. Twenty has no
   //    bulk-by-id-in filter on the workspace API for our custom field,
@@ -265,8 +292,22 @@ const handler = async (
       }
     }
 
-    // 4. Dispatch a bot for any PENDING event that's still eligible.
-    if (target.outcome === CallDispatchOutcome.PENDING && parsed?.vexaPlatform) {
+    // 4. Dispatch a bot only when the meeting is actually starting
+    //    (or just started). Vexa's bot waits in the room for
+    //    participants — but we still want to dispatch on the minute
+    //    of start, not weeks ahead, to avoid burning Vexa quota and
+    //    holding bot reservations for events that may get cancelled.
+    const startMs = ev.startsAt ? Date.parse(ev.startsAt) : NaN;
+    const inDispatchWindow =
+      Number.isFinite(startMs) &&
+      Date.now() >= startMs - DISPATCH_LEAD_MS &&
+      Date.now() <= startMs + DISPATCH_TAIL_MS;
+
+    if (
+      target.outcome === CallDispatchOutcome.PENDING &&
+      parsed?.vexaPlatform &&
+      inDispatchWindow
+    ) {
       const r = await dispatchVexaBot(
         vexa,
         parsed.vexaPlatform,
