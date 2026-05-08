@@ -10,21 +10,26 @@ import { CallDispatchOutcome, CallPlatform } from 'src/objects/call.object';
 
 // Calendar mirror + just-in-time bot dispatch.
 //
-// Every minute we walk the user's calendar (last 90d + future) and
-// ensure a Call row exists for each CalendarEvent. The Call's
-// dispatchOutcome reflects what we did about a Vexa bot:
+// Every minute we walk the user's NEXT 20 upcoming CalendarEvents
+// and ensure a Call row exists for each. dispatchOutcome reflects
+// what we did about a Vexa bot:
 //
-//   PENDING       eligible (future + Meet URL + not cancelled),
-//                 waiting for the dispatch window
-//   SCHEDULED     bot dispatched right at meeting start, vexa_url valid
+//   PENDING       eligible (Meet URL + not cancelled), waiting for
+//                 the dispatch window
+//   SCHEDULED     bot dispatched at meeting start, vexa_url valid
 //   ERROR         dispatch attempted, Vexa API error — see dispatchReason
-//   NOT_ELIGIBLE  past, cancelled, or no Meet URL — see dispatchReason
+//   NOT_ELIGIBLE  cancelled or no Meet URL — see dispatchReason
 //
-// Twenty's calendar sync uses bulk SQL ops that bypass the workspace
-// event emitter, so we have no DB-level events to subscribe to —
-// polling is the only reliable hook.
+// Why 20: bounds rate-limit exposure (Twenty caps mutations at
+// 100/min). Picks the soonest 20 — that's everything a sales rep
+// cares about right now. Past events are out of scope; if a user
+// wants historical Calls, they can extend later.
+//
+// Why polling: Twenty's calendar sync uses bulk SQL ops that bypass
+// the workspace event emitter — DB-event triggers don't fire from
+// imports.
 
-const PAST_WINDOW_MS = 90 * 24 * 60 * 60 * 1000; // last 90 days
+const FUTURE_EVENTS_LIMIT = 20;
 // Dispatch a bot only when the meeting is actually about to start.
 // Vexa's bot then waits in the meeting URL for participants. Earlier
 // dispatch wasted Vexa quota and reserved bots ahead of need.
@@ -108,99 +113,81 @@ const handler = async (
   const vexa = new VexaClient(apiKey);
 
   const now = new Date();
-  const pastEdge = new Date(now.getTime() - PAST_WINDOW_MS);
 
-  // 1. Pull calendar events in window. Two queries because we want
-  //    *all* future events (sorted ASC, the soonest first) plus the
-  //    last-90d slice (sorted DESC, most recent first). One batched
-  //    query with `first: 500 ASC` would silently truncate today's
-  //    meetings when the workspace has >500 historical events.
-  const fetchEvents = async (
-    filter: Record<string, unknown>,
-    direction: 'AscNullsLast' | 'DescNullsLast',
-  ): Promise<CalEv[]> => {
-    const r = (await client
-      .query({
-        calendarEvents: {
-          __args: {
-            filter: filter as any,
-            first: 500,
-            orderBy: [{ startsAt: direction }] as any,
-          },
-          edges: {
-            node: {
-              id: true,
-              title: true,
-              startsAt: true,
-              endsAt: true,
-              isCanceled: true,
-              conferenceLink: { primaryLinkUrl: true } as any,
-              calendarEventParticipants: {
-                __args: { first: 50 } as any,
-                edges: {
-                  node: {
-                    handle: true,
-                    personId: true,
-                    person: { id: true, companyId: true } as any,
-                  } as any,
-                },
-              } as any,
-            },
-          },
-        },
-      } as any)
-      .catch((e: unknown) => {
-        console.warn('cron-dispatch: calendarEvents query failed:', e);
-        return null;
-      })) as any;
-    return r?.calendarEvents?.edges?.map((e: any) => e.node) ?? [];
-  };
-
-  const futureEvents = await fetchEvents(
-    { startsAt: { gte: now.toISOString() } },
-    'AscNullsLast',
-  );
-  const pastEvents = await fetchEvents(
-    {
-      and: [
-        { startsAt: { gte: pastEdge.toISOString() } },
-        { startsAt: { lt: now.toISOString() } },
-      ],
-    },
-    'DescNullsLast',
-  );
-  const events: CalEv[] = [...futureEvents, ...pastEvents];
-
-  // 2. Pull existing Calls keyed by calendarEventId. Twenty has no
-  //    bulk-by-id-in filter on the workspace API for our custom field,
-  //    so fetch all (typical workspace will have << 1000 Calls; we'll
-  //    paginate later if it grows).
-  const callsResp = (await client
+  // 1. Pull the next N upcoming events. Single query, sorted ASC,
+  //    bounded — keeps mutation count per tick well under Twenty's
+  //    100/min rate limit and gives the user the most relevant
+  //    rows on the Calls page.
+  const eventsResp = (await client
     .query({
-      calls: {
-        __args: { first: 500 } as any,
+      calendarEvents: {
+        __args: {
+          filter: { startsAt: { gte: now.toISOString() } } as any,
+          first: FUTURE_EVENTS_LIMIT,
+          orderBy: [{ startsAt: 'AscNullsLast' }] as any,
+        },
         edges: {
           node: {
             id: true,
-            dispatchOutcome: true,
-            dispatchReason: true,
-            scheduledStart: true,
-            scheduledEnd: true,
-            calendarEventId: true,
-            vexaMeetingId: true,
+            title: true,
+            startsAt: true,
+            endsAt: true,
+            isCanceled: true,
+            conferenceLink: { primaryLinkUrl: true } as any,
+            calendarEventParticipants: {
+              __args: { first: 50 } as any,
+              edges: {
+                node: {
+                  handle: true,
+                  personId: true,
+                  person: { id: true, companyId: true } as any,
+                } as any,
+              },
+            } as any,
           },
         },
       },
     } as any)
     .catch((e: unknown) => {
-      console.warn('cron-dispatch: calls query failed:', e);
+      console.warn('cron-dispatch: calendarEvents query failed:', e);
       return null;
     })) as any;
+  const events: CalEv[] =
+    eventsResp?.calendarEvents?.edges?.map((e: any) => e.node) ?? [];
 
+  // 2. Pull existing Calls for exactly these N events. Filter by
+  //    calendarEventId IN the batch — fits in one page since N=20.
+  const eventIds = events.map((e) => e.id);
   const existingByCalEvId = new Map<string, ExistingCall>();
-  for (const e of callsResp?.calls?.edges ?? []) {
-    const n = e.node;
-    if (n.calendarEventId) existingByCalEvId.set(n.calendarEventId, n);
+  if (eventIds.length > 0) {
+    const r = (await client
+      .query({
+        calls: {
+          __args: {
+            filter: { calendarEventId: { in: eventIds } } as any,
+            first: eventIds.length,
+          } as any,
+          edges: {
+            node: {
+              id: true,
+              dispatchOutcome: true,
+              dispatchReason: true,
+              scheduledStart: true,
+              scheduledEnd: true,
+              calendarEventId: true,
+              vexaMeetingId: true,
+            },
+          },
+        },
+      } as any)
+      .catch((e: unknown) => {
+        console.warn('cron-dispatch: calls query failed:', e);
+        return null;
+      })) as any;
+    for (const e of r?.calls?.edges ?? []) {
+      const n = e.node;
+      if (n.calendarEventId) existingByCalEvId.set(n.calendarEventId, n);
+    }
   }
 
   let created = 0;
@@ -321,19 +308,42 @@ const handler = async (
         errors += 1;
         continue;
       }
-      const updateData: Record<string, unknown> = r.ok
-        ? {
-            dispatchOutcome: CallDispatchOutcome.SCHEDULED,
-            dispatchReason: null,
-            vexaMeetingId: String(r.meetingId),
-            vexaUrl: r.url,
-          }
-        : r.rateLimited
-        ? null
-        : {
-            dispatchOutcome: CallDispatchOutcome.ERROR,
-            dispatchReason: r.reason.slice(0, 500),
-          };
+      let updateData: Record<string, unknown> | null = null;
+      if (r.ok) {
+        updateData = {
+          dispatchOutcome: CallDispatchOutcome.SCHEDULED,
+          dispatchReason: null,
+          vexaMeetingId: String(r.meetingId),
+          vexaUrl: r.url,
+        };
+      } else if ('conflict' in r && r.conflict) {
+        // Recurring meeting — bot already scheduled for this URL.
+        // Reuse the existing SCHEDULED Call's vexaMeetingId for this
+        // shared meeting URL, so all instances point to one Vexa meeting.
+        const peer = await findExistingMeetingIdByUrl(
+          client,
+          parsed.url,
+        ).catch(() => null);
+        updateData = peer
+          ? {
+              dispatchOutcome: CallDispatchOutcome.SCHEDULED,
+              dispatchReason: null,
+              vexaMeetingId: peer.vexaMeetingId,
+              vexaUrl: peer.vexaUrl,
+            }
+          : {
+              dispatchOutcome: CallDispatchOutcome.ERROR,
+              dispatchReason:
+                'Vexa conflict and no peer SCHEDULED Call found',
+            };
+      } else if ('rateLimited' in r && r.rateLimited) {
+        updateData = null;
+      } else if ('reason' in r) {
+        updateData = {
+          dispatchOutcome: CallDispatchOutcome.ERROR,
+          dispatchReason: r.reason.slice(0, 500),
+        };
+      }
       if (updateData) {
         try {
           await client.mutation({
@@ -373,6 +383,36 @@ const findCallIdByEvent = async (
     },
   } as any)) as any;
   return r?.call?.id ?? null;
+};
+
+// On a 409 from Vexa (recurring meeting), find a sibling Call we
+// already SCHEDULED for the same Meet URL and reuse its meeting id.
+const findExistingMeetingIdByUrl = async (
+  client: CoreApiClient,
+  meetingUrl: string,
+): Promise<{ vexaMeetingId: string; vexaUrl: string } | null> => {
+  const r = (await client.query({
+    calls: {
+      __args: {
+        filter: {
+          and: [
+            { meetingUrl: { eq: meetingUrl } },
+            { dispatchOutcome: { eq: 'SCHEDULED' } },
+          ],
+        } as any,
+        first: 1,
+      } as any,
+      edges: {
+        node: { vexaMeetingId: true, vexaUrl: true },
+      },
+    },
+  } as any).catch(() => null)) as any;
+  const node = r?.calls?.edges?.[0]?.node;
+  if (!node?.vexaMeetingId) return null;
+  return {
+    vexaMeetingId: String(node.vexaMeetingId),
+    vexaUrl: node.vexaUrl ?? '',
+  };
 };
 
 export default defineLogicFunction({

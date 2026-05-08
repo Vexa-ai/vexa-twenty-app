@@ -48,6 +48,16 @@ export class VexaClient {
       );
     }
 
+    // 409 on recurring meetings — the bot is already scheduled for
+    // this (platform, native_meeting_id). Caller (cron-dispatch)
+    // detects this and reuses the existing Twenty Call's
+    // vexaMeetingId for this meeting URL.
+    if (res.status === 409) {
+      throw new VexaConflictError(
+        `Vexa active meeting already exists for ${input.platform}/${input.native_meeting_id}`,
+      );
+    }
+
     if (!res.ok) {
       const body = await res.text().catch(() => '<unreadable>');
       throw new Error(
@@ -71,4 +81,8 @@ export const dashboardBase = (): string =>
 
 export class VexaRateLimitError extends Error {
   readonly isRateLimit = true;
+}
+
+export class VexaConflictError extends Error {
+  readonly isConflict = true;
 }
