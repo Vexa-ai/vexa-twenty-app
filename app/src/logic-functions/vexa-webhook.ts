@@ -3,44 +3,86 @@ import { defineLogicFunction, RoutePayload } from 'twenty-sdk/define';
 
 import { VEXA_WEBHOOK_LF } from 'src/constants/universal-identifiers';
 import { verifyWebhookSignature } from 'src/lib/hmac';
+import { dashboardBase } from 'src/lib/vexa-client';
 import { CallStatus } from 'src/objects/call.object';
 
-// Vexa pushes meeting.* events here. We verify the HMAC, then mutate
-// the matching Call row by vexa_meeting_id. We never fetch transcript
-// or media — the user clicks vexa_url for that. This is the cache
-// invalidation we don't have to do.
+// Vexa pushes meeting.* events here. Contract from
+// /home/dima/dev/vexa/services/meeting-api/meeting_api/webhook_delivery.py
+// + .../webhooks.py:
+//
+//   event_type ∈ { meeting.completed, meeting.started, bot.failed,
+//                  meeting.status_change }
+//   data.meeting = {
+//     id, user_id, platform, native_meeting_id, constructed_meeting_url,
+//     status, completion_reason, failure_stage, start_time, end_time,
+//     data, created_at, updated_at
+//   }
+//
+// We verify HMAC, then upsert the matching Call row by vexaMeetingId.
+// We never fetch transcript or media — the user clicks vexa_url for
+// that. Cache invalidation we don't have to do.
+
+type VexaEventType =
+  | 'meeting.completed'
+  | 'meeting.started'
+  | 'bot.failed'
+  | 'meeting.status_change';
 
 type VexaWebhookEnvelope = {
   event_id: string;
-  event_type:
-    | 'meeting.scheduled'
-    | 'meeting.started'
-    | 'meeting.completed'
-    | 'meeting.failed'
-    | 'meeting.cancelled';
+  event_type: VexaEventType;
   api_version: string;
   created_at: string;
   data: {
     meeting: {
-      id: string;
-      platform: string;
-      native_meeting_id: string;
+      id: number;
+      user_id?: number;
+      platform?: string;
+      native_meeting_id?: string;
       constructed_meeting_url?: string;
       status?: string;
       completion_reason?: string;
       failure_stage?: string;
-      start_time?: string;
-      end_time?: string;
+      start_time?: string | null;
+      end_time?: string | null;
+      data?: Record<string, unknown>;
+      created_at?: string;
+      updated_at?: string;
     };
   };
 };
 
-const EVENT_TO_STATUS: Record<VexaWebhookEnvelope['event_type'], CallStatus> = {
-  'meeting.scheduled': CallStatus.SCHEDULED,
-  'meeting.started': CallStatus.IN_PROGRESS,
-  'meeting.completed': CallStatus.COMPLETED,
-  'meeting.failed': CallStatus.FAILED,
-  'meeting.cancelled': CallStatus.CANCELLED,
+// status_change carries the meeting.status field — map that, with a
+// sane fallback. event_type wins for the explicit ones.
+const eventToStatus = (env: VexaWebhookEnvelope): CallStatus | null => {
+  switch (env.event_type) {
+    case 'meeting.completed':
+      return CallStatus.COMPLETED;
+    case 'meeting.started':
+      return CallStatus.IN_PROGRESS;
+    case 'bot.failed':
+      return CallStatus.FAILED;
+    case 'meeting.status_change':
+      return mapMeetingStatus(env.data.meeting.status);
+    default:
+      return null;
+  }
+};
+
+const mapMeetingStatus = (s: string | undefined): CallStatus | null => {
+  switch ((s ?? '').toLowerCase()) {
+    case 'active':
+      return CallStatus.IN_PROGRESS;
+    case 'completed':
+      return CallStatus.COMPLETED;
+    case 'failed':
+      return CallStatus.FAILED;
+    case 'cancelled':
+    case 'canceled':
+      return CallStatus.CANCELLED;
+    default:
+      return null;
+  }
 };
 
 const handler = async (
@@ -52,12 +94,21 @@ const handler = async (
     return { ok: false, reason: 'NO_SECRET' };
   }
 
+  const headers = payload.headers ?? {};
   const signature =
-    payload.headers['x-webhook-signature'] ??
-    payload.headers['X-Webhook-Signature'];
+    headers['x-webhook-signature'] ?? headers['X-Webhook-Signature'];
+  const timestamp =
+    headers['x-webhook-timestamp'] ?? headers['X-Webhook-Timestamp'];
 
-  if (!verifyWebhookSignature(payload.rawBody ?? '', signature, secret)) {
-    console.warn('vexa-webhook: signature mismatch');
+  if (
+    !verifyWebhookSignature(
+      payload.rawBody ?? '',
+      signature,
+      timestamp,
+      secret,
+    )
+  ) {
+    console.warn('vexa-webhook: signature mismatch or stale');
     return { ok: false, reason: 'BAD_SIGNATURE' };
   }
 
@@ -66,35 +117,34 @@ const handler = async (
     return { ok: false, reason: 'MALFORMED' };
   }
 
-  const status = EVENT_TO_STATUS[envelope.event_type];
+  const status = eventToStatus(envelope);
   if (!status) {
-    // Unknown event types are tolerated; future Vexa versions may add new ones.
+    // Unknown event_type or status_change with an irrelevant status —
+    // tolerate; future Vexa versions may add new ones.
     return { ok: true };
   }
 
-  const client = new CoreApiClient();
-  const meetingId = envelope.data.meeting.id;
+  const meetingIdNum = envelope.data.meeting.id;
+  const meetingIdStr = String(meetingIdNum);
 
-  // Upsert by vexaMeetingId. The cron may have created a row in
-  // PENDING_SCHEDULE before Vexa knew the canonical id; in that case
-  // we'd have written meetingId at dispatch time and can find it.
-  const found = (await client.query({
-    call: {
-      __args: {
-        filter: { vexaMeetingId: { eq: meetingId } } as any,
+  const client = new CoreApiClient();
+
+  // Upsert by vexaMeetingId. The cron may have created the row at
+  // dispatch time; otherwise this is the first time we see this id.
+  const found = (await client
+    .query({
+      call: {
+        __args: { filter: { vexaMeetingId: { eq: meetingIdStr } } as any },
+        id: true,
+        status: true,
       },
-      id: true,
-      status: true,
-    },
-  } as any).catch(() => null)) as any;
+    } as any)
+    .catch(() => null)) as any;
 
   const existingId: string | undefined = found?.call?.id;
 
-  const update: Record<string, unknown> = {
-    status,
-  };
-
-  if (envelope.event_type === 'meeting.failed') {
+  const update: Record<string, unknown> = { status };
+  if (envelope.event_type === 'bot.failed') {
     update.failureReason =
       envelope.data.meeting.failure_stage ??
       envelope.data.meeting.completion_reason ??
@@ -109,16 +159,13 @@ const handler = async (
       },
     } as any);
   } else {
-    // First time we see this meeting — webhook arrived before any cron
-    // dispatch row. Create with what we know.
     await client.mutation({
       createCall: {
         __args: {
           data: {
             name: 'Vexa meeting',
-            vexaMeetingId: meetingId,
-            vexaUrl: dashboardUrlFor(meetingId),
-            status,
+            vexaMeetingId: meetingIdStr,
+            vexaUrl: `${dashboardBase()}/meetings/${meetingIdNum}`,
             platform: mapPlatform(envelope.data.meeting.platform) as any,
             meetingUrl:
               envelope.data.meeting.constructed_meeting_url ?? undefined,
@@ -131,14 +178,6 @@ const handler = async (
   }
 
   return { ok: true };
-};
-
-const dashboardUrlFor = (meetingId: string): string => {
-  const base = process.env.VEXA_API_BASE ?? 'https://api.vexa.ai';
-  const dashBase = base
-    .replace(/^https?:\/\/api\./, 'https://dashboard.')
-    .replace(/\/$/, '');
-  return `${dashBase}/m/${encodeURIComponent(meetingId)}`;
 };
 
 const mapPlatform = (raw: string | undefined): string => {
@@ -158,13 +197,13 @@ export default defineLogicFunction({
   universalIdentifier: VEXA_WEBHOOK_LF,
   name: 'vexa-webhook',
   description:
-    'Ingest Vexa meeting.* webhooks (HMAC-verified). Mutates the matching Call row.',
+    'Ingest Vexa meeting.* webhooks (HMAC-verified, timestamped). Mutates the matching Call row.',
   timeoutSeconds: 15,
   handler,
   httpRouteTriggerSettings: {
     path: '/vexa/ingest',
     httpMethod: 'POST',
     isAuthRequired: false,
-    forwardedRequestHeaders: ['x-webhook-signature'],
+    forwardedRequestHeaders: ['x-webhook-signature', 'x-webhook-timestamp'],
   },
 });

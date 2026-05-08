@@ -1,8 +1,9 @@
 // Thin wrapper around the Vexa REST API. We hit only what MVP needs:
-// dispatch a bot, and (for diagnostics) fetch a meeting's status.
-// Transcript / media are NOT fetched — by design. They live in Vexa.
+// dispatch a bot. Transcript / media are NOT fetched — by design.
+// They live in Vexa.
 
-const DEFAULT_BASE = 'https://api.vexa.ai';
+const DEFAULT_API_BASE = 'https://api.vexa.ai';
+const DEFAULT_DASHBOARD_BASE = 'https://dashboard.vexa.ai';
 
 export type VexaPlatform = 'google_meet' | 'zoom' | 'teams';
 
@@ -14,7 +15,8 @@ export type DispatchBotInput = {
 };
 
 export type DispatchBotResult = {
-  meeting_id: string;
+  // Vexa returns the canonical meeting id as an integer.
+  id: number;
   bot_id?: string;
   status: string;
 };
@@ -23,7 +25,7 @@ export class VexaClient {
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl: string = process.env.VEXA_API_BASE ??
-      DEFAULT_BASE,
+      DEFAULT_API_BASE,
   ) {
     if (!apiKey) {
       throw new Error('VexaClient: missing VEXA_API_KEY');
@@ -56,15 +58,16 @@ export class VexaClient {
     return (await res.json()) as DispatchBotResult;
   }
 
-  // Convenience: build the dashboard deep link for a Vexa meeting id.
-  // The vexa_url field in Twenty stores this; users click to jump in.
-  dashboardUrl(meetingId: string): string {
-    const dashBase = this.baseUrl
-      .replace(/^https?:\/\/api\./, 'https://dashboard.')
-      .replace(/\/$/, '');
-    return `${dashBase}/m/${encodeURIComponent(meetingId)}`;
+  // Deep link to the meeting in the Vexa dashboard. Convention from
+  // /home/dima/dev/vexa/services/dashboard/src/app/meetings/[id]/page.tsx:
+  //   /meetings/<integer meeting id>
+  dashboardUrl(meetingId: number | string): string {
+    return `${dashboardBase()}/meetings/${meetingId}`;
   }
 }
+
+export const dashboardBase = (): string =>
+  process.env.VEXA_DASHBOARD_BASE ?? DEFAULT_DASHBOARD_BASE;
 
 export class VexaRateLimitError extends Error {
   readonly isRateLimit = true;

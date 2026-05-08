@@ -165,8 +165,8 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
           __args: {
             data: {
               name: event.title ?? 'Untitled meeting',
-              vexaMeetingId: result.meeting_id,
-              vexaUrl: vexa.dashboardUrl(result.meeting_id),
+              vexaMeetingId: String(result.id),
+              vexaUrl: vexa.dashboardUrl(result.id),
               status: CallStatus.SCHEDULED,
               platform: parsed.platform,
               meetingUrl: parsed.url,

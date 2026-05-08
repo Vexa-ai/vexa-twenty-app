@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """Build an HMAC-signed Vexa webhook payload for testing.
 
+Mirrors the contract in
+/home/dima/dev/vexa/services/meeting-api/meeting_api/webhook_delivery.py:
+
+  signed_content = f"{timestamp}.".encode() + body_bytes
+  sig            = hmac.sha256(secret, signed_content).hexdigest()
+  X-Webhook-Signature: sha256=<hex>
+  X-Webhook-Timestamp: <unix-ts>
+
 Usage:
-  scripts/sign-webhook.py [--secret SECRET] [--event meeting.completed]
-                         [--meeting-id MID] [--platform google_meet]
+  scripts/sign-webhook.py [--secret SECRET]
+                         [--event meeting.completed]
+                         [--meeting-id 123]
+                         [--platform google_meet]
+                         [--status completed]
 """
 
 import argparse
@@ -12,21 +23,38 @@ import hmac
 import json
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--secret", default=os.environ.get("VEXA_WEBHOOK_SECRET", "dev-secret"))
-    p.add_argument("--event", default="meeting.completed",
-                   choices=["meeting.scheduled", "meeting.started",
-                            "meeting.completed", "meeting.failed",
-                            "meeting.cancelled"])
-    p.add_argument("--meeting-id", default=f"google_meet:test-{uuid.uuid4().hex[:8]}")
+    p.add_argument(
+        "--secret",
+        default=os.environ.get("VEXA_WEBHOOK_SECRET", "dev-secret"),
+    )
+    p.add_argument(
+        "--event",
+        default="meeting.completed",
+        choices=[
+            "meeting.completed",
+            "meeting.started",
+            "bot.failed",
+            "meeting.status_change",
+        ],
+    )
+    p.add_argument("--meeting-id", type=int, default=10001)
     p.add_argument("--platform", default="google_meet")
     p.add_argument("--native-id", default="abc-defg-hij")
-    p.add_argument("--meeting-url", default="https://meet.google.com/abc-defg-hij")
+    p.add_argument(
+        "--meeting-url", default="https://meet.google.com/abc-defg-hij"
+    )
+    p.add_argument(
+        "--status",
+        default=None,
+        help="meeting.data.meeting.status (only meaningful for meeting.status_change)",
+    )
     args = p.parse_args()
 
     body = {
@@ -40,16 +68,27 @@ def main() -> int:
                 "platform": args.platform,
                 "native_meeting_id": args.native_id,
                 "constructed_meeting_url": args.meeting_url,
-                "status": args.event.split(".")[1],
+                "status": args.status or args.event.split(".")[1],
+                "start_time": None,
+                "end_time": None,
+                "data": {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         },
     }
     raw = json.dumps(body, separators=(",", ":"))
-    sig = hmac.new(args.secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    ts = str(int(time.time()))
+    signed_content = f"{ts}.".encode() + raw.encode()
+    sig = hmac.new(args.secret.encode(), signed_content, hashlib.sha256).hexdigest()
 
-    # The shape executeOneLogicFunction expects for an HTTP-route handler:
     payload = {
-        "headers": {"x-webhook-signature": sig, "content-type": "application/json"},
+        "headers": {
+            "x-webhook-signature": f"sha256={sig}",
+            "x-webhook-timestamp": ts,
+            "authorization": f"Bearer {args.secret}",
+            "content-type": "application/json",
+        },
         "queryStringParameters": {},
         "pathParameters": {},
         "body": body,
