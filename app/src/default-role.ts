@@ -2,6 +2,7 @@ import { defineRole } from 'twenty-sdk/define';
 
 import {
   APP_DISPLAY_NAME,
+  CALL_ATTENDEE_UNIVERSAL_IDENTIFIER,
   CALL_UNIVERSAL_IDENTIFIER,
   DEFAULT_ROLE_UNIVERSAL_IDENTIFIER,
 } from 'src/constants/universal-identifiers';
@@ -22,6 +23,13 @@ export default defineRole({
   objectPermissions: [
     {
       objectUniversalIdentifier: CALL_UNIVERSAL_IDENTIFIER,
+      canReadObjectRecords: true,
+      canUpdateObjectRecords: true,
+      canSoftDeleteObjectRecords: true,
+      canDestroyObjectRecords: false,
+    },
+    {
+      objectUniversalIdentifier: CALL_ATTENDEE_UNIVERSAL_IDENTIFIER,
       canReadObjectRecords: true,
       canUpdateObjectRecords: true,
       canSoftDeleteObjectRecords: true,

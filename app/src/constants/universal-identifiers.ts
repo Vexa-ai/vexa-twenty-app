@@ -86,3 +86,30 @@ export const ALL_CALLS_VIEW =
   '5e0a9d2c-0401-4e01-8e01-1d5f8e3c7f01';
 export const CALLS_NAV_MENU_ITEM =
   '5e0a9d2c-0402-4e02-8e02-1d5f8e3c7f02';
+
+// CallAttendee junction object — Call ↔ Person many-to-many.
+// Each row is one attendee on one Call. The person relation is
+// nullable: if Twenty's calendar sync didn't resolve the email to
+// a Person, we still keep the row with email + displayName.
+export const CALL_ATTENDEE_UNIVERSAL_IDENTIFIER =
+  '5e0a9d2c-0601-4a01-8a01-1d5f8e3c8101';
+export const CALL_ATTENDEE_NAME_FIELD =
+  '5e0a9d2c-0602-4a02-8a02-1d5f8e3c8102';
+export const CALL_ATTENDEE_EMAIL_FIELD =
+  '5e0a9d2c-0603-4a03-8a03-1d5f8e3c8103';
+export const CALL_ATTENDEE_DISPLAY_NAME_FIELD =
+  '5e0a9d2c-0604-4a04-8a04-1d5f8e3c8104';
+export const CALL_ATTENDEE_RESPONSE_STATUS_FIELD =
+  '5e0a9d2c-0605-4a05-8a05-1d5f8e3c8105';
+
+// Call ↔ CallAttendee
+export const CALL_ATTENDEE_CALL_FIELD =
+  '5e0a9d2c-0701-4b01-8b01-1d5f8e3c8201';
+export const CALL_ATTENDEES_ON_CALL_FIELD =
+  '5e0a9d2c-0702-4b02-8b02-1d5f8e3c8202';
+
+// Person ↔ CallAttendee
+export const CALL_ATTENDEE_PERSON_FIELD =
+  '5e0a9d2c-0703-4b03-8b03-1d5f8e3c8203';
+export const CALL_ATTENDANCES_ON_PERSON_FIELD =
+  '5e0a9d2c-0704-4b04-8b04-1d5f8e3c8204';

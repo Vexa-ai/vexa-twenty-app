@@ -252,13 +252,15 @@ const handler = async (
       data.companyId = linkage.companyId;
       data.opportunityId = linkage.opportunityId;
 
+      let newCallId: string | null = null;
       try {
-        await client.mutation({
+        const createResp = (await client.mutation({
           createCall: {
             __args: { data: data as any },
             id: true,
           },
-        } as any);
+        } as any)) as any;
+        newCallId = createResp?.createCall?.id ?? null;
         created += 1;
       } catch (err) {
         errors += 1;
@@ -268,6 +270,42 @@ const handler = async (
           }`,
         );
         continue;
+      }
+
+      // Create CallAttendee junction rows so attendees show up on the
+      // Call record. The Person relation is nullable: external
+      // attendees with no Person record still get a row keyed on
+      // email + displayName.
+      if (newCallId) {
+        for (const p of participants) {
+          const handle = p.node?.handle ?? '';
+          const personId =
+            p.node?.personId ?? p.node?.person?.id ?? null;
+          if (!handle && !personId) continue;
+          try {
+            await client.mutation({
+              createCallAttendee: {
+                __args: {
+                  data: {
+                    name: handle || personId || 'Attendee',
+                    email: handle || null,
+                    displayName: null,
+                    callId: newCallId,
+                    personId: personId,
+                  } as any,
+                },
+                id: true,
+              },
+            } as any);
+          } catch (err) {
+            errors += 1;
+            console.error(
+              `cron-dispatch: createCallAttendee failed callId=${newCallId} email=${handle}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
       }
     } else if (
       existing.dispatchOutcome !== target.outcome ||
