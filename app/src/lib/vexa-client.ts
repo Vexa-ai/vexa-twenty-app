@@ -2,7 +2,7 @@
 // dispatch a bot. Transcript / media are NOT fetched — by design.
 // They live in Vexa.
 
-const DEFAULT_API_BASE = 'https://api.vexa.ai';
+const DEFAULT_API_BASE = 'https://api.cloud.vexa.ai';
 const DEFAULT_DASHBOARD_BASE = 'https://dashboard.vexa.ai';
 
 export type VexaPlatform = 'google_meet' | 'zoom' | 'teams';

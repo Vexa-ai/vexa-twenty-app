@@ -34,7 +34,7 @@ export default defineApplication({
       universalIdentifier: APPVAR_VEXA_API_BASE,
       description:
         'Vexa API base URL. Cloud users: leave as default. Self-host: e.g. https://api.your-vexa.example.',
-      value: 'https://api.vexa.ai',
+      value: 'https://api.cloud.vexa.ai',
       isSecret: false,
     },
     VEXA_DASHBOARD_BASE: {
