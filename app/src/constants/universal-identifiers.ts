@@ -54,9 +54,14 @@ export const CALL_CALENDAR_EVENT_FIELD =
 export const CALENDAR_EVENT_CALLS_FIELD =
   '5e0a9d2c-0106-4b06-8b06-1d5f8e3c7c06';
 
-// logic functions (cron only — webhook handler removed; Vexa is the
-// state authority, click-through to vexa_url for live state)
-export const VEXA_CRON_DISPATCH_LF =
+// logic functions
+//
+// Single trigger: react to Twenty's calendarEvent.created database
+// event. No cron, no polling, no race with the calendar sync — runs
+// the moment a CalendarEvent row appears in the workspace.
+// Universal identifier preserved across the cron→database-event
+// rename so Twenty migrates the function in place.
+export const VEXA_ON_CALENDAR_EVENT_LF =
   '5e0a9d2c-0202-4c02-8c02-1d5f8e3c7d02';
 
 // applicationVariables — workspace-level, edited in Twenty's Settings tab,
