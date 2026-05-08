@@ -2,10 +2,10 @@ import { defineView, ViewType } from 'twenty-sdk/define';
 
 import {
   ALL_CALLS_VIEW,
+  CALL_DISPATCH_OUTCOME_FIELD,
   CALL_NAME_FIELD,
   CALL_OPPORTUNITY_FIELD,
   CALL_SCHEDULED_START_FIELD,
-  CALL_STATUS_FIELD,
   CALL_UNIVERSAL_IDENTIFIER,
   CALL_VEXA_URL_FIELD,
 } from 'src/constants/universal-identifiers';
@@ -27,7 +27,7 @@ export default defineView({
     },
     {
       universalIdentifier: '5e0a9d2c-0502-4f02-8f02-1d5f8e3c8002',
-      fieldMetadataUniversalIdentifier: CALL_STATUS_FIELD,
+      fieldMetadataUniversalIdentifier: CALL_DISPATCH_OUTCOME_FIELD,
       position: 1,
       isVisible: true,
       size: 140,

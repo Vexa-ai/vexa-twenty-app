@@ -3,8 +3,9 @@
 A [Twenty CRM](https://twenty.com) app powered by [Vexa](https://github.com/Vexa-ai/vexa)
 — open-source meeting bots + transcripts.
 
-**Status:** spec, no code yet. First scaffold lands after the Twenty
-kickoff call (see [Open questions](#open-questions-for-twenty)).
+**Status:** working scaffold. `Call` object live in a local Twenty,
+cron dispatcher registered. See [TESTING.md](./TESTING.md) for what
+runs today.
 
 ---
 
@@ -43,11 +44,11 @@ Concretely:
 - Every external meeting on those calendars (Meet / Zoom / Teams) gets
   a Vexa bot dispatched automatically — no clicks, no extension, no
   remembering.
-- When the meeting ends, a `Call` row appears in Twenty, already
-  linked to the People who attended, their Company, and (when
-  unambiguous) the Opportunity.
-- Click the Call → deep link into Vexa for live viewing, replay,
-  transcript, media, bot controls, redactions.
+- A `Call` row appears in Twenty linked to the matching CalendarEvent
+  (and, in later releases, to People / Company / Opportunity), with a
+  `vexa_url` deep link.
+- Click the Call → land in Vexa for live viewing, replay, transcript,
+  media, bot controls, redactions.
 
 ```
    # user-visible surface
@@ -61,15 +62,14 @@ Concretely:
    # │  ▸ Skip 1:1 internal   [✓]         │
    # └────────────────────────────────────┘
    #
-   # ┌─ Opportunity: Acme — Q2 ───────────┐    auto-populated
+   # ┌─ Opportunity: Acme — Q2 ───────────┐    auto-populated (later release)
    # │ relations: Call ×5  ───────────────┼──▶ Call detail
    # └────────────────────────────────────┘
    #
    # ┌─ Call: Acme — Discovery ───────────┐
-   # │ status      IN_PROGRESS · 12m      │
-   # │ attendees   Felix [Acme], Dmitry   │
-   # │ opportunity Acme — Q2 expansion    │
-   # │ vexa_url    https://dashboard…     │ ◀── click: live or past
+   # │ dispatch    Scheduled              │    ← Twenty's view: what we did
+   # │ scheduled   May 8, 14:00–14:45     │    ← from CalendarEvent
+   # │ vexa_url    https://dashboard…     │ ◀── click: live state lives in Vexa
    # └────────────────────────────────────┘
 ```
 
@@ -78,6 +78,9 @@ Concretely:
 - Not an in-CRM transcript viewer. (Next release.)
 - Not AI summaries, action items, draft emails. (Two releases out.)
 - Not an autonomous deal-hygiene agent. (The endgame, not the entry.)
+- **Not a meeting-state mirror.** Twenty does not track whether a call
+  has started, ended, succeeded, or failed. Click `vexa_url` to find
+  out. (See "Pure pointer" below — applied consistently.)
 
 We are validating one hypothesis: **does zero-touch capture into the
 right deal context change rep behavior?** If yes, the rest is worth
@@ -90,41 +93,52 @@ Two design choices do most of the work.
 ### 1. Pure pointer, not mirror
 
 Vexa is the source of truth for everything with a lifecycle (live bot
-state, transcript revisions, media, redactions, retention). Twenty
-owns the join keys + the relationships — the one thing Vexa doesn't
-have: *what this meeting means for the deal.*
+state, transcript revisions, media, redactions, retention, *and
+meeting status*). Twenty owns the join keys + the relationships — the
+one thing Vexa doesn't have: *what this meeting means for the deal.*
 
 ```
    # Twenty                                     Vexa
    ┌─────────────────────────────┐              ┌──────────────────────┐
    │ Call                        │              │ Meeting (source of   │
    │  ─ vexa_meeting_id ─────────┼─────────────▶│  truth)              │
-   │  ─ vexa_url       ──────────┼──[Open in ──▶│   • live bot state   │
-   │  ─ status (mirrored)        │   Vexa]      │   • transcript       │
-   │  ─ relations: Person,       │              │   • media            │
-   │      Company, Opportunity,  │              │   • redactions       │
-   │      CalendarEvent          │              │   • bot controls     │
+   │  ─ vexa_url       ──────────┼──[Open in ──▶│   • live status      │
+   │  ─ relations: Person,       │   Vexa]      │   • transcript       │
+   │      Company, Opportunity,  │              │   • media            │
+   │      CalendarEvent          │              │   • redactions       │
+   │  ─ dispatchOutcome          │              │   • bot controls     │
+   │      (what we did)          │              │                      │
    └─────────────────────────────┘              └──────────────────────┘
 ```
 
 ```
    # why pointer, not mirror
    #
-   #  ─ single source of truth: edits & redactions in Vexa propagate
-   #    instantly. no cache invalidation.
+   #  ─ single source of truth: edits, redactions, AND status changes in
+   #    Vexa propagate instantly. no cache invalidation, no webhook
+   #    handler, no public ingestion endpoint to harden.
    #
    #  ─ GDPR erasure trivial: delete in Vexa → Twenty link dies.
-   #    no transcript shards to chase across two systems.
-   #
-   #  ─ real-time native: vexa_url works while the meeting is live —
-   #    rep can jump straight from the Opportunity into a live call.
+   #    no transcript shards or status mirrors to chase.
    #
    #  ─ no MP4s in Twenty file storage. no GraphQL multipart upload.
    #    no storage cost. no bandwidth bill.
    #
    #  ─ bot management (kick / extend / redact / delete) lives in Vexa,
-   #    not rebuilt in Twenty. one [Manage in Vexa] link is enough.
+   #    not rebuilt in Twenty. one [Open in Vexa] link is enough.
 ```
+
+The only state Twenty tracks is `dispatchOutcome` — what *we* did at
+dispatch time, because that decision happens in our cron, not in Vexa:
+
+```
+   SCHEDULED   bot dispatched, vexa_url valid
+   SKIPPED     policy rejected (blocklist / internal-only); no bot
+   ERROR       dispatch failed (Vexa API error / rate-limit); no bot
+```
+
+That's it. Three values, all known at dispatch time. No FSM, no
+webhook, no race conditions.
 
 Tradeoff named out loud: if the user uninstalls Vexa or churns, their
 Twenty Calls become dead links. Mitigation is a one-time
@@ -141,9 +155,10 @@ accept the meeting, it gets captured.
 Mechanism: a cron logic function reads Twenty's built-in
 `CalendarEvent` rows in a 24h horizon, applies the user's policy
 (domain blocklist, internal-skip, etc.), and dispatches a Vexa bot
-~5 minutes before each meeting starts. Vexa's `meeting.completed`
-webhook flips the `Call` status to `COMPLETED`. The user does
-nothing.
+~5 minutes before each meeting starts. `POST /bots` returns the
+canonical Vexa meeting id; we write it + the deep link into a Call
+row and stop. The user does nothing. To find out what happened on
+the call, click through.
 
 The privacy cost of zero-touch is real — recording without an
 explicit click means the consent UX has to be excellent. Domain
@@ -158,27 +173,34 @@ or trail the recording.
 ## The `Call` object
 
 A custom object on Twenty's data model. Pure pointer — no transcript
-column, no media column, no summary column.
+column, no media column, no status mirror.
 
 ### Fields
 
 ```
    # identity & link
    id                 uuid          # twenty pk
-   vexa_meeting_id    text  UNIQUE  # join key into vexa
-   vexa_url           text          # deep link (works live + past)
+   name               text          # mirrors CalendarEvent title
+   vexa_meeting_id    text          # set after POST /bots returns its id;
+                                    # empty for SKIPPED / ERROR rows
+   vexa_url           text          # https://dashboard.vexa.ai/meetings/<id>
    provider           enum          # vexa | meeting_baas | manual
                                     #   future schema convergence point
-   status             enum          # FSM (see below) — mirrored locally
-                                    #   so list views can filter w/o
-                                    #   per-row API calls
-   failure_reason     text nullable
+
+   # what we did at dispatch time (the only state Twenty owns)
+   dispatch_outcome   enum          # SCHEDULED | SKIPPED | ERROR
+   dispatch_reason    text          # policy reason or error message;
+                                    # empty when SCHEDULED
 
    # source meeting (from CalendarEvent, not Vexa)
-   platform           enum          # google_meet | zoom | teams
+   platform           enum          # google_meet | zoom | teams | other
    meeting_url        text          # the join URL we dispatched to
    scheduled_start    timestamptz
    scheduled_end      timestamptz
+
+   # for the future agent
+   attendee_emails    raw_json      # captured at dispatch time;
+                                    # Person resolution is the agent's job
 
    # audit
    created_at         timestamptz
@@ -188,13 +210,15 @@ column, no media column, no summary column.
 ### Relations
 
 ```
-   Call ──many-to-many──▶ Person          # via attendee email match
+   Call ──many-to-one ──▶ Opportunity     # nullable; set when overlap
+                                          #   between attendees and the
+                                          #   Opp's contacts is unambiguous
    Call ──many-to-one ──▶ Company         # majority vote across attendees
-   Call ──many-to-one ──▶ Opportunity     # nullable; set only when there
-                                          #   is exactly one open Opp
-                                          #   whose contacts overlap attendees
-   Call ──one-to-one  ──▶ CalendarEvent   # nullable but usually set
+   Call ──many-to-one ──▶ CalendarEvent   # usually set
 ```
+
+(Person ↔ Call is a junction object, deferred to a later release —
+attendee_emails captures the raw data now.)
 
 These relations are the **whole reason this object exists**. Without
 them, transcripts are just files. With them, every later release —
@@ -205,38 +229,11 @@ viewer, skills, agent — is a single GraphQL query away.
 - **Not "Meeting"**: that's how users refer to `CalendarEvent`. Two
   things both named Meeting in the UI = permanent confusion tax.
 - **Not "Recording"**: media-centric and surveillance-y. The object
-  must exist even when the bot failed and there's no media. "Recording"
-  also overlaps with "the MP4 file" if we ever split that out.
+  must exist even when the bot was skipped or errored and there's no
+  recording at all.
 - **"Call"** is CRM-native (Salesforce, HubSpot, Pipedrive all use it),
   activity-centric, reads naturally in UI ("3 Calls with Felix"), and
   matches what reps already say.
-
-### Status FSM
-
-```
-   #                 ┌──────────────────────────────┐
-   #                 ▼                              │
-   #   PENDING_SCHEDULE ──▶ SCHEDULED ──▶ IN_PROGRESS ──▶ COMPLETED
-   #          │                 │                │
-   #          │                 │                ├──▶ FAILED        (bot crash / no audio)
-   #          │                 ├──▶ CANCELLED   (event removed/declined)
-   #          │                 └──▶ RESCHEDULED (event moved → re-enter PENDING_SCHEDULE)
-   #          └──▶ SKIPPED      (policy: blocked / internal-only / opt-out)
-```
-
-```
-   # transition triggers
-   #
-   #   cron tick           : (no row | RESCHEDULED | PENDING_SCHEDULE) → SCHEDULED
-   #   POST /bots ok       : PENDING_SCHEDULE → SCHEDULED   (store vexa_meeting_id)
-   #   POST /bots 429/5xx  : stay PENDING_SCHEDULE, retry w/ backoff
-   #   bot.joined webhook  : SCHEDULED → IN_PROGRESS        (optional)
-   #   meeting.completed   : * → COMPLETED
-   #   meeting.failed      : * → FAILED
-   #   CalendarEvent del   : SCHEDULED → CANCELLED          (best-effort cancel bot)
-   #   CalendarEvent edit  : SCHEDULED → RESCHEDULED        (cancel bot, re-enter)
-   #   policy says no      : PENDING_SCHEDULE → SKIPPED
-```
 
 ---
 
@@ -244,27 +241,34 @@ viewer, skills, agent — is a single GraphQL query away.
 
 ```
    # T-∞    user installs app, sets API key, picks calendars, sets policy
-   # T-24h  cron sees event in horizon → upserts Call(PENDING_SCHEDULE)
-   # T-15m  cron tick → policy passes → POST /bots → SCHEDULED
-   # T+0    meeting starts; bot joins; (optional) IN_PROGRESS via webhook
+   # T-24h  cron sees event in horizon → no Call yet → continue
+   # T-5m   cron tick → policy passes → POST /bots
+   #          Vexa returns { id: 12345 }
+   #        → write Call(SCHEDULED, vexa_meeting_id=12345,
+   #                     vexa_url=https://dashboard.vexa.ai/meetings/12345)
+   # T+0    meeting starts; bot joins (live state visible in Vexa)
    # T+45m  meeting ends; Vexa transcribes
-   # T+50m  meeting.completed webhook → verify HMAC →
-   #        resolve attendees to People → link Company/Opp →
-   #        write Call(COMPLETED)
-   # T+50m  user sees Call on Opportunity timeline
+   #
+   # User opens Twenty → sees Call linked to Opportunity → clicks
+   # vexa_url → lands on the Vexa dashboard for that meeting,
+   # transcript + media + status all live there.
 ```
 
 ```
    # cron horizon vs. dispatch lead-time
    #
-   #   horizon = how far ahead we *materialize* PENDING_SCHEDULE rows.
-   #             wider = more visibility for opt-outs, more rows to manage.
-   #             proposal: 24h.
-   #
-   #   lead    = how early we actually dispatch the bot.
-   #             too early = bot waits / Vexa quota burn.
+   #   horizon = how far ahead we *consider* events.  proposal: 24h.
+   #   lead    = how early we POST /bots.             proposal: 5m.
+   #             too early = bot waits / Vexa quota.
    #             too late  = race vs. meeting start.
-   #             proposal: 5m before scheduled_start.
+```
+
+Skipped + errored cases write rows too — silent failures kill trust:
+
+```
+   # policy rejects:    Call(SKIPPED, dispatch_reason="policy:BLOCKLISTED_DOMAIN")
+   # POST /bots fails:  Call(ERROR,   dispatch_reason="<error from Vexa>")
+   # POST /bots 429:    no row written; next tick retries
 ```
 
 ---
@@ -275,7 +279,8 @@ viewer, skills, agent — is a single GraphQL query away.
    # 1. attendee → Person resolution
    #    ─ email match is easy; the value is what to do when it misses.
    #    ─ create-on-the-fly Person? behind a setting; default OFF.
-   #    ─ unmatched emails surfaced as "unknown attendees" on Call.
+   #    ─ for now we capture attendee_emails as RAW_JSON and let the
+   #      agent (later release) resolve them — keeps MVP small.
    #
    # 2. opportunity linking
    #    ─ heuristic: open Opp whose primary contacts ∩ attendees ≠ ∅.
@@ -289,27 +294,27 @@ viewer, skills, agent — is a single GraphQL query away.
    #    ─ legal-basis copy in install flow; jurisdictions vary.
    #
    # 4. idempotency
-   #    ─ webhook retries happen. vexa_meeting_id is unique; upsert.
+   #    ─ Call.calendar_event_id unique; cron checks before dispatch.
    #    ─ event.updated → reconcile; don't double-dispatch.
    #
    # 5. failure surfaces
-   #    ─ bot didn't join, audio empty, transcript timed out → write
-   #      Call(FAILED) with reason. silent failures kill trust.
+   #    ─ POST /bots fails → write Call(ERROR, dispatch_reason=...).
+   #    ─ silent failures kill trust.
    #
    # 6. uninstall hygiene
-   #    ─ revoke Vexa webhook
    #    ─ best-effort cancel pending bots
-   #    ─ optional: "export transcripts to Notes before disconnect"
+   #    ─ optional: "export Call list to Notes before disconnect"
 ```
 
 ---
 
 ## What's out of scope for this release
 
-Resist scope creep. The trap is letting this release grow features that
-belong in later ones.
+Resist scope creep. The trap is letting this release grow features
+that belong in later ones.
 
 - ❌ in-CRM transcript viewer (next release)
+- ❌ webhook ingestion (Vexa is the state authority — click through)
 - ❌ AI summaries / action items / draft emails
 - ❌ ⌘K skills ("record now", "summarize last call")
 - ❌ autonomous deal-hygiene agent on Opportunity
@@ -336,6 +341,12 @@ works and people keep it on**.
    #                 ─ flags risks ("3 calls, no exec sponsor named")
    #             user approves a queue. CRM hygiene becomes a review
    #             task, not an authoring task. this is why we're here.
+   #
+   # Note: the agent (superproduct) needs an event source for
+   # "meeting completed → run hygiene." Three options to pick from
+   # then, not now: (a) re-add a Vexa webhook, (b) Twenty cron polls
+   # Vexa for completed-since-last-tick, (c) Vexa's MCP server. The
+   # decision is deferred to that release.
 ```
 
 ---
@@ -344,13 +355,13 @@ works and people keep it on**.
 
 ```
    #   primary signal:
-   #     coverage = recordings_completed / eligible_meetings   target ≥70%
+   #     coverage = dispatched / eligible_meetings   target ≥70%
    #     "eligible" = on a watched calendar, has meet URL, ≥1 external
    #                  attendee, not domain-blocked, not user-skipped.
    #
    #   secondary:
-   #     bot dispatch success rate           ≥95%
-   #     accidental records (complaints)     <2% of recordings
+   #     bot dispatch success rate           ≥95%   (SCHEDULED / dispatched-attempts)
+   #     accidental records (complaints)     <2% of dispatched
    #     installs that disable autopilot in <14 days  <20%
    #
    #   anti-signal: high uninstall after first surprise recording
@@ -363,21 +374,21 @@ works and people keep it on**.
 
 ```
    # functional
-   #   ─ install flow: API key + calendar pick + policy → first Call
-   #     within 24h on a real meeting
-   #   ─ all FSM transitions observable in Twenty (status field)
-   #   ─ HMAC-verified webhook ingestion; no Calls written from
-   #     unsigned requests
-   #   ─ at least one CANCELLED and one RESCHEDULED case handled live
+   #   ─ install flow: API key + calendar pick + policy → first
+   #     SCHEDULED Call within 24h on a real meeting
+   #   ─ SKIPPED rows visible w/ reason for blocked / internal-only
+   #   ─ ERROR rows visible w/ reason on Vexa API failure
+   #   ─ Call.vexa_url opens the right meeting in dashboard.vexa.ai
    #
    # privacy
    #   ─ domain blocklist enforced before POST /bots
    #   ─ internal-only skip enforced
-   #   ─ uninstall revokes webhook + best-effort cancels pending bots
+   #   ─ uninstall best-effort cancels pending bots
    #
    # ops
-   #   ─ structured logs per Call.id; failure_reason populated on FAILED
-   #   ─ dashboard: coverage, dispatch success, webhook lag (p50/p95)
+   #   ─ structured logs per Call.id; dispatch_reason populated on
+   #     SKIPPED / ERROR
+   #   ─ dashboard: coverage, dispatch success rate
    #
    # measurement
    #   ─ event taxonomy in place to compute the coverage signal above
@@ -386,91 +397,40 @@ works and people keep it on**.
 
 ---
 
-## Repo skeleton (proposed)
+## Repo skeleton (current)
 
 ```
-   src/
-     objects/
-       call.ts                            # custom object schema
-     logic-functions/
-       cron-dispatch.ts                   # cron: scan + POST /bots
-       vexa-webhook.ts                    # HTTP: /vexa/ingest
-       on-uninstall.ts                    # cleanup (if Twenty supports it)
-     front-components/
-       settings.tsx                       # API key + policy + blocklist
-     lib/
-       vexa-client.ts                     # thin Vexa API wrapper
-       hmac.ts                            # webhook signature verify
-       attendee-match.ts                  # email → Person resolver
-       opportunity-linker.ts              # attendee overlap heuristic
-       policy.ts                          # blocklist + skip rules
-   test/
-     fixtures/                            # Vexa webhook payloads
-     *.spec.ts
-   application-config.ts                  # CLI-generated app identity
-   package.json
+   app/                                     Twenty app (yarn workspace)
+     src/
+       application-config.ts                app identity + server vars
+       constants/universal-identifiers.ts   stable UUIDs
+       default-role.ts                      logic-function role
+       objects/
+         call.object.ts                     Call schema
+       fields/
+         opportunity-on-call.field.ts       Call → Opportunity (M2O)
+         calls-on-opportunity.field.ts      inverse (O2M)
+         company-on-call.field.ts           Call → Company
+         calls-on-company.field.ts          inverse
+         calendar-event-on-call.field.ts    Call → CalendarEvent
+         calls-on-calendar-event.field.ts   inverse
+       logic-functions/
+         cron-dispatch.ts                   */5 * * * * — the autopilot
+       lib/
+         vexa-client.ts                     POST /bots wrapper +
+                                            dashboard URL builder
+         meeting-url.ts                     Meet/Zoom/Teams parser
+         policy.ts                          blocklist + skip rules
+       views/
+         all-calls.view.ts                  default table view
+       navigation-menu-items/
+         calls.navigation-menu-item.ts      sidebar link
+   scripts/
+     twenty-token.sh                        mints a bearer token for the
+                                            local Twenty (dev creds)
+   .env.local                               VEXA_API_KEY (gitignored)
    README.md
-   PRIVACY.md
-```
-
----
-
-## Day-1 checklist (after kickoff call)
-
-```
-   #  ─ scaffold via Twenty CLI
-   #      verify scaffolder name on call (`yarn create twenty-app`?)
-   #
-   #  ─ wire remote
-   #      yarn twenty remote add <workspace-url>
-   #      yarn twenty dev → confirm hello-world installs
-   #
-   #  ─ commit scaffold as "chore: initial scaffold"
-   #
-   #  ─ port the Call object schema (this README) → src/objects/call.ts
-   #
-   #  ─ stub two logic functions (no Vexa calls yet, just shapes)
-   #      src/logic-functions/cron-dispatch.ts     (cron, every 5m)
-   #      src/logic-functions/vexa-webhook.ts      (HTTP, /vexa/ingest)
-   #
-   #  ─ stub settings front component
-   #      fields: vexa_api_key, watched_calendars[], policy, blocklist
-   #
-   #  ─ first deploy
-   #      yarn twenty deploy
-   #      verify: install flow renders, settings page saves a key
-```
-
-That's day 1. Capture not yet wired — but the app is installable, the
-`Call` object exists, and the surfaces are in place. Day 2..N drives
-against the ship gate above.
-
----
-
-## Open questions for Twenty
-
-```
-   #  Q1  app identity / OAuth — per-workspace OAuth client, or
-   #      single Vexa app server-side?                          [BLOCKS DAY 1]
-   #
-   #  Q2  scaffolder name & current status — `yarn twenty dev`
-   #      flow working today, or still in preview?              [BLOCKS DAY 1]
-   #
-   #  Q3  uninstall lifecycle hook — does Twenty fire onUninstall
-   #      so we can revoke webhook + cancel pending bots?       [BLOCKS DAY 1]
-   #
-   #  Q4  list-view custom cell renderer — extension point for
-   #      a "● live" badge in Call list views?
-   #
-   #  Q5  schema convergence — will Twenty bless a shared `Call`
-   #      object so users can swap recorders without losing
-   #      history? who owns the canonical schema?
-   #
-   #  Q6  marketplace privacy norms — Twenty-core consent UX,
-   #      or every recorder reinvents it?
-   #
-   #  Q7  dev workspace — Twenty provisions one for us, or do we
-   #      run local Twenty for development?                     [BLOCKS DAY 1]
+   TESTING.md
 ```
 
 ---

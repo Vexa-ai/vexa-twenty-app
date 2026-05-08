@@ -9,15 +9,16 @@ import {
   truthy,
 } from 'src/lib/policy';
 import { VexaClient, VexaRateLimitError } from 'src/lib/vexa-client';
-import { CallStatus } from 'src/objects/call.object';
+import { CallDispatchOutcome } from 'src/objects/call.object';
 
 // Every 5 minutes: read CalendarEvents in [now, now+horizon] that
 // haven't yet got a Call row, evaluate the privacy policy, and
 // dispatch a Vexa bot ~LEAD_MINUTES before scheduled_start. The
-// resulting Call goes to SCHEDULED. The webhook will move it forward.
+// resulting Call records the dispatch outcome (SCHEDULED / SKIPPED /
+// ERROR) and a vexa_url pointing at the Vexa dashboard. State after
+// dispatch lives in Vexa — click vexa_url to see it.
 //
-// This handler is the single place where autopilot can produce a
-// recording. AUTOPILOT_ENABLED=false short-circuits everything.
+// AUTOPILOT_ENABLED=false short-circuits everything.
 
 type CalendarEventRow = {
   id: string;
@@ -137,14 +138,14 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
           __args: {
             data: {
               name: event.title ?? 'Untitled meeting',
-              status: CallStatus.SKIPPED,
+              dispatchOutcome: CallDispatchOutcome.SKIPPED,
+              dispatchReason: `policy:${decision.reason}`,
               platform: parsed.platform,
               meetingUrl: parsed.url,
               scheduledStart: event.startsAt,
               scheduledEnd: event.endsAt,
               calendarEventId: event.id,
               attendeeEmails,
-              failureReason: `policy:${decision.reason}`,
             } as any,
           },
           id: true,
@@ -167,7 +168,7 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
               name: event.title ?? 'Untitled meeting',
               vexaMeetingId: String(result.id),
               vexaUrl: vexa.dashboardUrl(result.id),
-              status: CallStatus.SCHEDULED,
+              dispatchOutcome: CallDispatchOutcome.SCHEDULED,
               platform: parsed.platform,
               meetingUrl: parsed.url,
               scheduledStart: event.startsAt,
@@ -186,21 +187,21 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
         console.warn(`cron-dispatch: rate-limited on ${event.id}; will retry`);
         continue;
       }
-      // Persistent failure: write a FAILED Call so the user sees it.
+      // Persistent failure: write an ERROR Call so the user sees the miss.
       await client.mutation({
         createCall: {
           __args: {
             data: {
               name: event.title ?? 'Untitled meeting',
-              status: CallStatus.FAILED,
+              dispatchOutcome: CallDispatchOutcome.ERROR,
+              dispatchReason:
+                err instanceof Error ? err.message : 'dispatch error',
               platform: parsed.platform,
               meetingUrl: parsed.url,
               scheduledStart: event.startsAt,
               scheduledEnd: event.endsAt,
               calendarEventId: event.id,
               attendeeEmails,
-              failureReason:
-                err instanceof Error ? err.message : 'dispatch error',
             } as any,
           },
           id: true,

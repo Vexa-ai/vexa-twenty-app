@@ -2,32 +2,30 @@ import { defineObject, FieldType } from 'twenty-sdk/define';
 
 import {
   CALL_ATTENDEE_EMAILS_FIELD,
-  CALL_FAILURE_REASON_FIELD,
+  CALL_DISPATCH_OUTCOME_FIELD,
+  CALL_DISPATCH_REASON_FIELD,
   CALL_MEETING_URL_FIELD,
   CALL_NAME_FIELD,
   CALL_PLATFORM_FIELD,
   CALL_PROVIDER_FIELD,
   CALL_SCHEDULED_END_FIELD,
   CALL_SCHEDULED_START_FIELD,
-  CALL_STATUS_FIELD,
   CALL_UNIVERSAL_IDENTIFIER,
   CALL_VEXA_MEETING_ID_FIELD,
   CALL_VEXA_URL_FIELD,
 } from 'src/constants/universal-identifiers';
 
-// Pure pointer: Vexa stays the source of truth for transcript / media /
-// redactions. Twenty owns the join keys + the relations. No transcript
-// column, no media column, no summary column — those would only drift.
+// Pure pointer. Twenty owns the join keys + the relationships. State
+// lives in Vexa. To find out what actually happened on a call, click
+// vexa_url. We do NOT mirror status, transcript, media, or summaries
+// — that's by design. See README.md "pure pointer, not mirror".
 
-export enum CallStatus {
-  PENDING_SCHEDULE = 'PENDING_SCHEDULE',
-  SCHEDULED = 'SCHEDULED',
-  IN_PROGRESS = 'IN_PROGRESS',
-  COMPLETED = 'COMPLETED',
-  FAILED = 'FAILED',
-  CANCELLED = 'CANCELLED',
-  RESCHEDULED = 'RESCHEDULED',
-  SKIPPED = 'SKIPPED',
+// The only state Twenty tracks is **what we did at dispatch time** —
+// because that decision happens here, not in Vexa.
+export enum CallDispatchOutcome {
+  SCHEDULED = 'SCHEDULED', // bot dispatched to Vexa, vexa_url valid
+  SKIPPED = 'SKIPPED',     // policy rejected (blocklist / internal-only)
+  ERROR = 'ERROR',         // dispatch failed (Vexa API error / rate-limit)
 }
 
 export enum CallProvider {
@@ -69,7 +67,7 @@ export default defineObject({
       name: 'vexaMeetingId',
       label: 'Vexa meeting ID',
       description:
-        'Unique join key into Vexa. Combination of platform + native meeting id.',
+        'Returned by POST /bots at dispatch time. Empty for SKIPPED or ERROR rows.',
       icon: 'IconKey',
     },
     {
@@ -78,74 +76,50 @@ export default defineObject({
       name: 'vexaUrl',
       label: 'Open in Vexa',
       description:
-        'Deep link to the meeting in the Vexa dashboard. Works for live and past meetings.',
+        'Deep link to the meeting in the Vexa dashboard. Click to see live or past state.',
       icon: 'IconExternalLink',
     },
     {
-      universalIdentifier: CALL_STATUS_FIELD,
+      universalIdentifier: CALL_DISPATCH_OUTCOME_FIELD,
       type: FieldType.SELECT,
-      name: 'status',
-      label: 'Status',
+      name: 'dispatchOutcome',
+      label: 'Dispatch',
+      description:
+        'What we did when this calendar event came due. SCHEDULED = bot dispatched. SKIPPED = policy rejected. ERROR = dispatch failed.',
       icon: 'IconStatusChange',
-      defaultValue: `'${CallStatus.PENDING_SCHEDULE}'`,
+      defaultValue: `'${CallDispatchOutcome.SCHEDULED}'`,
       options: [
         {
           id: '5e0a9d2c-1001-4a01-8a01-1d5f8e3c7b91',
-          value: CallStatus.PENDING_SCHEDULE,
-          label: 'Pending schedule',
-          position: 0,
-          color: 'gray',
-        },
-        {
-          id: '5e0a9d2c-1002-4a02-8a02-1d5f8e3c7b92',
-          value: CallStatus.SCHEDULED,
+          value: CallDispatchOutcome.SCHEDULED,
           label: 'Scheduled',
-          position: 1,
-          color: 'blue',
-        },
-        {
-          id: '5e0a9d2c-1003-4a03-8a03-1d5f8e3c7b93',
-          value: CallStatus.IN_PROGRESS,
-          label: 'In progress',
-          position: 2,
-          color: 'orange',
-        },
-        {
-          id: '5e0a9d2c-1004-4a04-8a04-1d5f8e3c7b94',
-          value: CallStatus.COMPLETED,
-          label: 'Completed',
-          position: 3,
+          position: 0,
           color: 'green',
         },
         {
-          id: '5e0a9d2c-1005-4a05-8a05-1d5f8e3c7b95',
-          value: CallStatus.FAILED,
-          label: 'Failed',
-          position: 4,
+          id: '5e0a9d2c-1002-4a02-8a02-1d5f8e3c7b92',
+          value: CallDispatchOutcome.SKIPPED,
+          label: 'Skipped',
+          position: 1,
+          color: 'gray',
+        },
+        {
+          id: '5e0a9d2c-1003-4a03-8a03-1d5f8e3c7b93',
+          value: CallDispatchOutcome.ERROR,
+          label: 'Error',
+          position: 2,
           color: 'red',
         },
-        {
-          id: '5e0a9d2c-1006-4a06-8a06-1d5f8e3c7b96',
-          value: CallStatus.CANCELLED,
-          label: 'Cancelled',
-          position: 5,
-          color: 'gray',
-        },
-        {
-          id: '5e0a9d2c-1007-4a07-8a07-1d5f8e3c7b97',
-          value: CallStatus.RESCHEDULED,
-          label: 'Rescheduled',
-          position: 6,
-          color: 'gray',
-        },
-        {
-          id: '5e0a9d2c-1008-4a08-8a08-1d5f8e3c7b98',
-          value: CallStatus.SKIPPED,
-          label: 'Skipped',
-          position: 7,
-          color: 'gray',
-        },
       ],
+    },
+    {
+      universalIdentifier: CALL_DISPATCH_REASON_FIELD,
+      type: FieldType.TEXT,
+      name: 'dispatchReason',
+      label: 'Dispatch reason',
+      description:
+        'Policy reason when SKIPPED (e.g. BLOCKLISTED_DOMAIN). Error message when ERROR. Empty when SCHEDULED.',
+      icon: 'IconAlertCircle',
     },
     {
       universalIdentifier: CALL_PROVIDER_FIELD,
@@ -243,21 +217,12 @@ export default defineObject({
       defaultValue: null,
     },
     {
-      universalIdentifier: CALL_FAILURE_REASON_FIELD,
-      type: FieldType.TEXT,
-      name: 'failureReason',
-      label: 'Failure reason',
-      description:
-        'Populated when status=FAILED. Silent failures kill trust; surface every miss.',
-      icon: 'IconAlertCircle',
-    },
-    {
       universalIdentifier: CALL_ATTENDEE_EMAILS_FIELD,
       type: FieldType.RAW_JSON,
       name: 'attendeeEmails',
       label: 'Attendee emails',
       description:
-        'Raw list of attendee emails captured from the calendar event. Person resolution happens in the webhook handler.',
+        'Raw list of attendee emails captured from the calendar event. Person resolution is left for the agent (later release).',
       icon: 'IconAt',
     },
   ],

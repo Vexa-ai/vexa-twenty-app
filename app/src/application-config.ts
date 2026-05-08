@@ -67,11 +67,11 @@ export default defineApplication({
       isSecret: false,
       isRequired: false,
     },
-    VEXA_WEBHOOK_SECRET: {
+    VEXA_DASHBOARD_BASE: {
       description:
-        'Shared secret for HMAC-SHA256 verification of meeting.* webhooks from Vexa.',
-      isSecret: true,
-      isRequired: true,
+        'Vexa dashboard base URL (used to build vexa_url deep links). Defaults to https://dashboard.vexa.ai',
+      isSecret: false,
+      isRequired: false,
     },
   },
 });

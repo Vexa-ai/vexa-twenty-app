@@ -17,7 +17,10 @@ export const CALL_VEXA_MEETING_ID_FIELD =
   '5e0a9d2c-0003-4a03-8a03-1d5f8e3c7b03';
 export const CALL_VEXA_URL_FIELD =
   '5e0a9d2c-0004-4a04-8a04-1d5f8e3c7b04';
-export const CALL_STATUS_FIELD =
+// Renamed in webhook-removal pass: status FSM → dispatchOutcome (3 states),
+// failureReason → dispatchReason. Universal identifiers preserved so
+// Twenty's migration recognizes them as renames, not drops.
+export const CALL_DISPATCH_OUTCOME_FIELD =
   '5e0a9d2c-0005-4a05-8a05-1d5f8e3c7b05';
 export const CALL_PROVIDER_FIELD =
   '5e0a9d2c-0006-4a06-8a06-1d5f8e3c7b06';
@@ -29,7 +32,7 @@ export const CALL_SCHEDULED_START_FIELD =
   '5e0a9d2c-0009-4a09-8a09-1d5f8e3c7b09';
 export const CALL_SCHEDULED_END_FIELD =
   '5e0a9d2c-000a-4a0a-8a0a-1d5f8e3c7b0a';
-export const CALL_FAILURE_REASON_FIELD =
+export const CALL_DISPATCH_REASON_FIELD =
   '5e0a9d2c-000b-4a0b-8a0b-1d5f8e3c7b0b';
 export const CALL_ATTENDEE_EMAILS_FIELD =
   '5e0a9d2c-000c-4a0c-8a0c-1d5f8e3c7b0c';
@@ -50,13 +53,10 @@ export const CALL_CALENDAR_EVENT_FIELD =
 export const CALENDAR_EVENT_CALLS_FIELD =
   '5e0a9d2c-0106-4b06-8b06-1d5f8e3c7c06';
 
-// logic functions
-export const VEXA_WEBHOOK_LF =
-  '5e0a9d2c-0201-4c01-8c01-1d5f8e3c7d01';
+// logic functions (cron only — webhook handler removed; Vexa is the
+// state authority, click-through to vexa_url for live state)
 export const VEXA_CRON_DISPATCH_LF =
   '5e0a9d2c-0202-4c02-8c02-1d5f8e3c7d02';
-export const VEXA_POST_INSTALL_LF =
-  '5e0a9d2c-0203-4c03-8c03-1d5f8e3c7d03';
 
 // app variables (non-secret) and server variables (secret)
 export const APPVAR_AUTOPILOT_ENABLED =
