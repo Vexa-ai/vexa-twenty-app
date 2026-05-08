@@ -47,8 +47,13 @@ type CalEv = {
     edges: {
       node: {
         handle?: string | null;
+        displayName?: string | null;
         personId?: string | null;
-        person?: { id?: string | null; companyId?: string | null } | null;
+        person?: {
+          id?: string | null;
+          companyId?: string | null;
+          name?: { firstName?: string | null; lastName?: string | null } | null;
+        } | null;
       };
     }[];
   } | null;
@@ -139,8 +144,13 @@ const handler = async (
               edges: {
                 node: {
                   handle: true,
+                  displayName: true,
                   personId: true,
-                  person: { id: true, companyId: true } as any,
+                  person: {
+                    id: true,
+                    companyId: true,
+                    name: { firstName: true, lastName: true } as any,
+                  } as any,
                 } as any,
               },
             } as any,
@@ -276,20 +286,36 @@ const handler = async (
       // Call record. The Person relation is nullable: external
       // attendees with no Person record still get a row keyed on
       // email + displayName.
+      //
+      // CallAttendee.name is the labelIdentifier — set it to the
+      // Person's full name when a Person matched, falling back to
+      // the calendar's displayName, then email. Twenty renders this
+      // as the row label everywhere (relation widget, list view).
       if (newCallId) {
         for (const p of participants) {
           const handle = p.node?.handle ?? '';
+          const calDisplayName = p.node?.displayName ?? '';
           const personId =
             p.node?.personId ?? p.node?.person?.id ?? null;
+          const personFirst = p.node?.person?.name?.firstName ?? '';
+          const personLast = p.node?.person?.name?.lastName ?? '';
+          const personFullName = `${personFirst} ${personLast}`.trim();
           if (!handle && !personId) continue;
+
+          const label =
+            personFullName ||
+            calDisplayName ||
+            handle ||
+            'Attendee';
+
           try {
             await client.mutation({
               createCallAttendee: {
                 __args: {
                   data: {
-                    name: handle || personId || 'Attendee',
+                    name: label,
                     email: handle || null,
-                    displayName: null,
+                    displayName: calDisplayName || null,
                     callId: newCallId,
                     personId: personId,
                   } as any,
