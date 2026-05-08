@@ -58,17 +58,14 @@ export const CALENDAR_EVENT_CALLS_FIELD =
 export const VEXA_CRON_DISPATCH_LF =
   '5e0a9d2c-0202-4c02-8c02-1d5f8e3c7d02';
 
-// app variables (non-secret) and server variables (secret)
-export const APPVAR_AUTOPILOT_ENABLED =
+// applicationVariables — workspace-level, edited in Twenty's Settings tab,
+// injected as process.env.<KEY> at logic-function runtime.
+export const APPVAR_VEXA_API_KEY =
   '5e0a9d2c-0301-4d01-8d01-1d5f8e3c7e01';
-export const APPVAR_DOMAIN_BLOCKLIST =
+export const APPVAR_VEXA_API_BASE =
   '5e0a9d2c-0302-4d02-8d02-1d5f8e3c7e02';
-export const APPVAR_SKIP_INTERNAL =
+export const APPVAR_VEXA_DASHBOARD_BASE =
   '5e0a9d2c-0303-4d03-8d03-1d5f8e3c7e03';
-export const APPVAR_HORIZON_HOURS =
-  '5e0a9d2c-0304-4d04-8d04-1d5f8e3c7e04';
-export const APPVAR_LEAD_MINUTES =
-  '5e0a9d2c-0305-4d05-8d05-1d5f8e3c7e05';
 
 // view + navigation
 export const ALL_CALLS_VIEW =
