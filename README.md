@@ -10,18 +10,26 @@ kickoff call (see [Open questions](#open-questions-for-twenty)).
 
 ## Why
 
-Sales reps lose deals to bad CRM hygiene. The richest signal in any
-deal — what was actually said in the meeting — is the most likely
-piece to be missing from the CRM. Reps either don't update the deal
-after a call, or they paste a screenshot of notes nobody re-reads.
+[Twenty](https://twenty.com) is a self-hosted, open-source CRM.
+[Vexa](https://github.com/Vexa-ai/vexa) is a self-hosted, open-source
+meeting bot + transcription platform. They fit together by nature:
 
-Existing meeting recorders make this worse. They build a parallel UI
-where transcripts and summaries live, *next to* the CRM. The rep now
-has two systems to check, and the deal record stays empty.
+- **Twenty** holds the structured business data — People, Companies,
+  Opportunities, Calendar events.
+- **Vexa** produces the unstructured high-signal data — full
+  meeting transcripts, the richest fuel an AI agent can consume
+  about a deal.
 
-The CRM should be the place where the meeting lives in context — next
-to the deal, the contact, and the company. Not a sibling tab in
-another product.
+The mapping between the two is the value. A transcript on its own is
+a wall of text; a transcript bound to the right Opportunity, the
+right People, and the right Company is a primary input for every
+later AI workload — summaries, next-step extraction, deal-health
+scoring, autonomous hygiene.
+
+Both halves are self-hostable, so this stack works where SaaS
+recorders can't go: regulated industries, EU data-residency,
+on-prem, air-gapped. That's the audience that has nowhere good to
+turn today.
 
 ## What
 
