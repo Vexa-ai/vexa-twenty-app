@@ -1,24 +1,45 @@
 # vexa-twenty-app
 
-A [Twenty CRM](https://twenty.com) app that connects [Vexa](https://github.com/Vexa-ai/vexa)
-— open-source meeting bots + transcripts — to your CRM.
+A [Twenty CRM](https://twenty.com) app powered by [Vexa](https://github.com/Vexa-ai/vexa)
+— open-source meeting bots + transcripts.
 
-**Status:** spec, no code yet. First scaffold lands after the Twenty kickoff
-call (see [Open questions](#open-questions-for-twenty)).
+**Status:** spec, no code yet. First scaffold lands after the Twenty
+kickoff call (see [Open questions](#open-questions-for-twenty)).
 
 ---
 
-## Product (MVP)
+## Why
 
-> **Accept a meeting → its transcript shows up on the right Opportunity.**
+Sales reps lose deals to bad CRM hygiene. The richest signal in any
+deal — what was actually said in the meeting — is the most likely
+piece to be missing from the CRM. Reps either don't update the deal
+after a call, or they paste a screenshot of notes nobody re-reads.
 
-A salesperson installs the app, pastes a Vexa API key once, picks which
-calendars to watch, and stops thinking about recording. Every external
-meeting on those calendars with a Meet / Zoom / Teams URL gets a Vexa bot
-dispatched automatically. When the meeting ends, a `Call` row appears in
-Twenty — already linked to the People who attended, their Company, and
-(if there's exactly one open) the Opportunity. One click on the Call
-opens the meeting in Vexa for live or post-hoc viewing.
+Existing meeting recorders make this worse. They build a parallel UI
+where transcripts and summaries live, *next to* the CRM. The rep now
+has two systems to check, and the deal record stays empty.
+
+The CRM should be the place where the meeting lives in context — next
+to the deal, the contact, and the company. Not a sibling tab in
+another product.
+
+## What
+
+> **Accept a meeting → it shows up on the right Opportunity. Click it
+> → you're inside the call, live or replayed, in Vexa.**
+
+Concretely:
+
+- Install the app into a Twenty workspace, paste a Vexa API key once,
+  pick which calendars to watch.
+- Every external meeting on those calendars (Meet / Zoom / Teams) gets
+  a Vexa bot dispatched automatically — no clicks, no extension, no
+  remembering.
+- When the meeting ends, a `Call` row appears in Twenty, already
+  linked to the People who attended, their Company, and (when
+  unambiguous) the Opportunity.
+- Click the Call → deep link into Vexa for live viewing, replay,
+  transcript, media, bot controls, redactions.
 
 ```
    # user-visible surface
@@ -44,19 +65,26 @@ opens the meeting in Vexa for live or post-hoc viewing.
    # └────────────────────────────────────┘
 ```
 
-We are **not** building an in-CRM transcript viewer in the first ship. We
-are validating *capture* — does zero-touch recording into the right deal
-context change behavior? Viewer / inline summaries / actions / agent
-follow in later releases.
+**What this release is NOT** — and the discipline matters:
 
----
+- Not an in-CRM transcript viewer. (Next release.)
+- Not AI summaries, action items, draft emails. (Two releases out.)
+- Not an autonomous deal-hygiene agent. (The endgame, not the entry.)
 
-## Architecture: pure pointer
+We are validating one hypothesis: **does zero-touch capture into the
+right deal context change rep behavior?** If yes, the rest is worth
+building. If no, no fancy viewer or agent rescues it.
 
-Vexa stays the source of truth for everything with a lifecycle (live bot
-state, transcript revisions, media, redactions, retention). Twenty owns
-the join keys + the relationships — the one thing Vexa doesn't have:
-*what this meeting means for the deal.*
+## How
+
+Two design choices do most of the work.
+
+### 1. Pure pointer, not mirror
+
+Vexa is the source of truth for everything with a lifecycle (live bot
+state, transcript revisions, media, redactions, retention). Twenty
+owns the join keys + the relationships — the one thing Vexa doesn't
+have: *what this meeting means for the deal.*
 
 ```
    # Twenty                                     Vexa
@@ -92,9 +120,30 @@ the join keys + the relationships — the one thing Vexa doesn't have:
 
 Tradeoff named out loud: if the user uninstalls Vexa or churns, their
 Twenty Calls become dead links. Mitigation is a one-time
-"export transcripts to Notes before uninstall" button if it ever becomes
-a complaint. Acceptable cost; same shape as every other link-out
-integration (Slack, Linear, Notion-in-CRM).
+"export transcripts to Notes before uninstall" button if it ever
+becomes a complaint. Acceptable cost; same shape as every other
+link-out integration (Slack, Linear, Notion-in-CRM).
+
+### 2. Calendar autopilot, not "click to record"
+
+Every recorder that requires a click to start is one a busy rep
+forgets to use. The whole product hangs on **zero-touch**: if you
+accept the meeting, it gets captured.
+
+Mechanism: a cron logic function reads Twenty's built-in
+`CalendarEvent` rows in a 24h horizon, applies the user's policy
+(domain blocklist, internal-skip, etc.), and dispatches a Vexa bot
+~5 minutes before each meeting starts. Vexa's `meeting.completed`
+webhook flips the `Call` status to `COMPLETED`. The user does
+nothing.
+
+The privacy cost of zero-touch is real — recording without an
+explicit click means the consent UX has to be excellent. Domain
+blocklist, internal-only skip, first-recording warning, and
+uninstall hygiene **all ship in the first release, before autopilot
+defaults on**. This is non-negotiable: the difference between a
+useful product and a creepy one is whether privacy primitives lead
+or trail the recording.
 
 ---
 
