@@ -105,59 +105,71 @@ export const handleCalendarEvent = async (
     })),
   );
 
+  let vexaResult: { id: number } | null = null;
+  let vexaErr: unknown = null;
   try {
-    const result = await vexa.dispatchBot({
+    vexaResult = await vexa.dispatchBot({
       platform: parsed.vexaPlatform,
       native_meeting_id: parsed.nativeId,
     });
-
-    await client.mutation({
-      createCall: {
-        __args: {
-          data: {
-            name: eventRecord.title ?? 'Untitled meeting',
-            vexaMeetingId: String(result.id),
-            vexaUrl: vexa.dashboardUrl(result.id),
-            dispatchOutcome: CallDispatchOutcome.SCHEDULED,
-            platform: parsed.platform,
-            meetingUrl: parsed.url,
-            scheduledStart: eventRecord.startsAt,
-            scheduledEnd: eventRecord.endsAt,
-            calendarEventId: eventId,
-            attendeeEmails,
-            companyId: linkage.companyId,
-            opportunityId: linkage.opportunityId,
-          } as any,
-        },
-        id: true,
-      },
-    } as any);
-    return { dispatched: `vexa meeting ${result.id}` };
+    console.log(
+      `dispatch-handler: vexa POST /bots ok eventId=${eventId} vexaMeetingId=${vexaResult.id}`,
+    );
   } catch (err) {
+    vexaErr = err;
     if (err instanceof VexaRateLimitError) {
-      return { skipped: 'rate-limited; retry on next event' };
+      console.warn(`dispatch-handler: rate-limited eventId=${eventId}`);
+      return { skipped: 'rate-limited; retry next tick' };
     }
+    console.error(
+      `dispatch-handler: vexa POST /bots failed eventId=${eventId}: ${String(err)}`,
+    );
+  }
+
+  // Always try to write a Call row — SCHEDULED on success, ERROR on
+  // failure. Mutations are wrapped in their own try/catch so a
+  // permission / schema error doesn't swallow both paths.
+  const data: Record<string, unknown> = {
+    name: eventRecord.title ?? 'Untitled meeting',
+    platform: parsed.platform,
+    meetingUrl: parsed.url,
+    scheduledStart: eventRecord.startsAt,
+    scheduledEnd: eventRecord.endsAt,
+    calendarEventId: eventId,
+    attendeeEmails,
+    companyId: linkage.companyId,
+    opportunityId: linkage.opportunityId,
+  };
+  if (vexaResult) {
+    data.vexaMeetingId = String(vexaResult.id);
+    data.vexaUrl = vexa.dashboardUrl(vexaResult.id);
+    data.dispatchOutcome = CallDispatchOutcome.SCHEDULED;
+  } else {
+    data.dispatchOutcome = CallDispatchOutcome.ERROR;
+    data.dispatchReason =
+      vexaErr instanceof Error ? vexaErr.message : 'dispatch error';
+  }
+
+  try {
     await client.mutation({
       createCall: {
-        __args: {
-          data: {
-            name: eventRecord.title ?? 'Untitled meeting',
-            dispatchOutcome: CallDispatchOutcome.ERROR,
-            dispatchReason:
-              err instanceof Error ? err.message : 'dispatch error',
-            platform: parsed.platform,
-            meetingUrl: parsed.url,
-            scheduledStart: eventRecord.startsAt,
-            scheduledEnd: eventRecord.endsAt,
-            calendarEventId: eventId,
-            attendeeEmails,
-            companyId: linkage.companyId,
-            opportunityId: linkage.opportunityId,
-          } as any,
-        },
+        __args: { data: data as any },
         id: true,
       },
     } as any);
-    return { skipped: `dispatch failed: ${String(err)}` };
+    console.log(
+      `dispatch-handler: createCall ok eventId=${eventId} outcome=${data.dispatchOutcome}`,
+    );
+  } catch (mutErr) {
+    console.error(
+      `dispatch-handler: createCall FAILED eventId=${eventId}: ${
+        mutErr instanceof Error ? mutErr.stack ?? mutErr.message : String(mutErr)
+      }`,
+    );
+    return { skipped: `createCall failed: ${String(mutErr)}` };
   }
+
+  return vexaResult
+    ? { dispatched: `vexa meeting ${vexaResult.id}` }
+    : { skipped: `dispatch failed: ${String(vexaErr)}` };
 };
