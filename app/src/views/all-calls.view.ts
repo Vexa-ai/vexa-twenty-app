@@ -1,4 +1,4 @@
-import { defineView, ViewType } from 'twenty-sdk/define';
+import { defineView, ViewSortDirection, ViewType } from 'twenty-sdk/define';
 
 import {
   ALL_CALLS_VIEW,
@@ -17,6 +17,16 @@ export default defineView({
   type: ViewType.TABLE,
   icon: 'IconPhone',
   position: 0,
+  // Default sort: most recent first. Twenty's `position` default
+  // ordering buries today's events behind 2027 ones — pin sort to
+  // scheduledStart so the meeting that's about to happen is on top.
+  sorts: [
+    {
+      universalIdentifier: '5e0a9d2c-0506-4f06-8f06-1d5f8e3c8006',
+      fieldMetadataUniversalIdentifier: CALL_SCHEDULED_START_FIELD,
+      direction: ViewSortDirection.DESC,
+    },
+  ],
   fields: [
     {
       universalIdentifier: '5e0a9d2c-0501-4f01-8f01-1d5f8e3c8001',
