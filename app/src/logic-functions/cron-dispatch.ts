@@ -198,9 +198,24 @@ const handler = async (
   // 3. For each event, ensure a matching Call row reflects the truth.
   for (const ev of events) {
     const existing = existingByCalEvId.get(ev.id);
+
+    // Reschedule detection: if the user moved the meeting after we
+    // already dispatched a bot, the bot is for the OLD time slot.
+    // Vexa's empty-room timeout may have already retired it. Flip
+    // back to PENDING so the next dispatch-window check re-fires
+    // POST /bots; if Vexa's bot is still alive, our 409 path reuses
+    // the same meeting id.
+    const wasRescheduledAfterDispatch =
+      !!existing &&
+      existing.dispatchOutcome === CallDispatchOutcome.SCHEDULED &&
+      !!existing.scheduledStart &&
+      !!ev.startsAt &&
+      existing.scheduledStart !== ev.startsAt;
+
     const alreadyDispatched =
-      existing?.dispatchOutcome === CallDispatchOutcome.SCHEDULED ||
-      !!existing?.vexaMeetingId;
+      !wasRescheduledAfterDispatch &&
+      (existing?.dispatchOutcome === CallDispatchOutcome.SCHEDULED ||
+        !!existing?.vexaMeetingId);
     const target = computeOutcome(ev, alreadyDispatched);
 
     const parsed = parseMeetingUrl(ev.conferenceLink?.primaryLinkUrl ?? '');
