@@ -71,6 +71,15 @@ export const APPVAR_VEXA_API_BASE =
   '5e0a9d2c-0302-4d02-8d02-1d5f8e3c7e02';
 export const APPVAR_VEXA_DASHBOARD_BASE =
   '5e0a9d2c-0303-4d03-8d03-1d5f8e3c7e03';
+// TWENTY_API_KEY shadows the runtime-injected applicationAccessToken
+// because Twenty's app-token auth currently rejects /graphql reads on
+// workspace-bound objects with "Authentication is required". Until
+// that's understood, we let the operator paste a long-lived workspace
+// admin API key (Settings → APIs & Webhooks) — CoreApiClient reads
+// TWENTY_API_KEY from env and the user-defined applicationVariable
+// overrides the runtime default per Twenty's spread order.
+export const APPVAR_TWENTY_API_KEY =
+  '5e0a9d2c-0304-4d04-8d04-1d5f8e3c7e04';
 
 // view + navigation
 export const ALL_CALLS_VIEW =

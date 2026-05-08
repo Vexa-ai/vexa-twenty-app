@@ -5,6 +5,7 @@ import {
   APP_DISPLAY_NAME,
   APP_LOGO_URL,
   APPLICATION_UNIVERSAL_IDENTIFIER,
+  APPVAR_TWENTY_API_KEY,
   APPVAR_VEXA_API_BASE,
   APPVAR_VEXA_API_KEY,
   APPVAR_VEXA_DASHBOARD_BASE,
@@ -44,6 +45,12 @@ export default defineApplication({
       description:
         'Vexa dashboard base URL (used for vexa_url deep links). Cloud users: leave as default.',
       value: 'https://dashboard.vexa.ai',
+      isSecret: false,
+    },
+    TWENTY_API_KEY: {
+      universalIdentifier: APPVAR_TWENTY_API_KEY,
+      description:
+        'Required for the calendar-mirror cron. Mint at Settings → APIs & Webhooks (role: Admin). Workaround: the runtime-injected app token is currently rejected on workspace /graphql reads.',
       isSecret: false,
     },
   },

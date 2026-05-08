@@ -86,7 +86,20 @@ const handler = async (
     return { scanned: 0, created: 0, updated: 0, dispatched: 0, errors: 0 };
   }
 
+  // The runtime injects TWENTY_APP_ACCESS_TOKEN + TWENTY_API_KEY both
+  // pointing at the application-scoped JWT, but it's currently
+  // rejected on /graphql workspace reads with "Authentication is
+  // required". Workaround: take TWENTY_API_KEY off the env if the
+  // operator pasted a long-lived workspace admin key, so SDK's
+  // fallback chain (TWENTY_APP_ACCESS_TOKEN → TWENTY_API_KEY) lands
+  // on theirs. Hard-overwrite via setAuthorizationToken below to be
+  // sure.
+  const adminKey = process.env.TWENTY_API_KEY ?? '';
+  delete (process.env as Record<string, string | undefined>).TWENTY_APP_ACCESS_TOKEN;
   const client = new CoreApiClient();
+  if (adminKey) {
+    (client as any).setAuthorizationToken?.(adminKey);
+  }
   const vexa = new VexaClient(apiKey);
 
   const now = new Date();
