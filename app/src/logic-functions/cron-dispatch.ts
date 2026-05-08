@@ -2,6 +2,7 @@ import { CoreApiClient } from 'twenty-client-sdk/core';
 import { CronPayload, defineLogicFunction } from 'twenty-sdk/define';
 
 import { VEXA_CRON_DISPATCH_LF } from 'src/constants/universal-identifiers';
+import { resolveLinkage } from 'src/lib/attendee-linker';
 import { parseMeetingUrl } from 'src/lib/meeting-url';
 import {
   evaluatePolicy,
@@ -57,15 +58,18 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
   const vexa = new VexaClient(apiKey);
 
   // Pull events in [now, now+horizon]. Twenty's CalendarEvent already
-  // normalizes attendees + conference URL.
+  // normalizes attendees + conference URL. Twenty's filter language
+  // requires "exactly one operator per field" — gte+lte must be
+  // AND-combined, not nested.
   const eventsResp = (await client.query({
     calendarEvents: {
       __args: {
         filter: {
-          startsAt: {
-            gte: new Date(now).toISOString(),
-            lte: new Date(now + horizonMs).toISOString(),
-          },
+          and: [
+            { startsAt: { gte: new Date(now).toISOString() } },
+            { startsAt: { lte: new Date(now + horizonMs).toISOString() } },
+            { isCanceled: { eq: false } },
+          ],
         } as any,
         first: 200,
       },
@@ -132,6 +136,11 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
       skipInternalOnly: skipInternal,
     });
 
+    // Resolve attendees → Person → Company → Opportunity. We do this
+    // even for SKIPPED rows so the CRM still shows the deal context
+    // around what we *didn't* record (audit value).
+    const linkage = await resolveLinkage(client, attendeeEmails);
+
     if (!decision.allow) {
       await client.mutation({
         createCall: {
@@ -146,6 +155,8 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
               scheduledEnd: event.endsAt,
               calendarEventId: event.id,
               attendeeEmails,
+              companyId: linkage.companyId,
+              opportunityId: linkage.opportunityId,
             } as any,
           },
           id: true,
@@ -175,6 +186,8 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
               scheduledEnd: event.endsAt,
               calendarEventId: event.id,
               attendeeEmails,
+              companyId: linkage.companyId,
+              opportunityId: linkage.opportunityId,
             } as any,
           },
           id: true,
@@ -202,6 +215,8 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
               scheduledEnd: event.endsAt,
               calendarEventId: event.id,
               attendeeEmails,
+              companyId: linkage.companyId,
+              opportunityId: linkage.opportunityId,
             } as any,
           },
           id: true,
