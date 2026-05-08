@@ -20,11 +20,13 @@ import {
 // vexa_url. We do NOT mirror status, transcript, media, or summaries
 // — that's by design. See README.md "pure pointer, not mirror".
 
-// The only state Twenty tracks is **what we did at dispatch time** —
-// because that decision happens here, not in Vexa.
+// Calendar mirror: every CalendarEvent in the window becomes a Call.
+// dispatchOutcome reflects what (if anything) we did about the bot.
 export enum CallDispatchOutcome {
-  SCHEDULED = 'SCHEDULED', // bot dispatched to Vexa, vexa_url valid
-  ERROR = 'ERROR',         // dispatch failed (Vexa API error)
+  PENDING = 'PENDING',           // eligible (future + Meet URL), not yet dispatched
+  SCHEDULED = 'SCHEDULED',       // bot dispatched to Vexa, vexa_url valid
+  ERROR = 'ERROR',               // dispatch failed (Vexa API error)
+  NOT_ELIGIBLE = 'NOT_ELIGIBLE', // no Meet URL / past event / cancelled — see dispatchReason
 }
 
 export enum CallProvider {
@@ -86,21 +88,35 @@ export default defineObject({
       description:
         'What we did when this calendar event came due. SCHEDULED = bot dispatched. SKIPPED = policy rejected. ERROR = dispatch failed.',
       icon: 'IconStatusChange',
-      defaultValue: `'${CallDispatchOutcome.SCHEDULED}'`,
+      defaultValue: `'${CallDispatchOutcome.PENDING}'`,
       options: [
+        {
+          id: '5e0a9d2c-1004-4a04-8a04-1d5f8e3c7b94',
+          value: CallDispatchOutcome.PENDING,
+          label: 'Pending',
+          position: 0,
+          color: 'yellow',
+        },
         {
           id: '5e0a9d2c-1001-4a01-8a01-1d5f8e3c7b91',
           value: CallDispatchOutcome.SCHEDULED,
           label: 'Scheduled',
-          position: 0,
+          position: 1,
           color: 'green',
         },
         {
           id: '5e0a9d2c-1003-4a03-8a03-1d5f8e3c7b93',
           value: CallDispatchOutcome.ERROR,
           label: 'Error',
-          position: 1,
+          position: 2,
           color: 'red',
+        },
+        {
+          id: '5e0a9d2c-1005-4a05-8a05-1d5f8e3c7b95',
+          value: CallDispatchOutcome.NOT_ELIGIBLE,
+          label: 'Not eligible',
+          position: 3,
+          color: 'gray',
         },
       ],
     },
