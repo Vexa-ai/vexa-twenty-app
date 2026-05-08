@@ -79,17 +79,16 @@ const handler = async (
   // PENDING_SCHEDULE before Vexa knew the canonical id; in that case
   // we'd have written meetingId at dispatch time and can find it.
   const found = (await client.query({
-    calls: {
+    call: {
       __args: {
         filter: { vexaMeetingId: { eq: meetingId } } as any,
-        limit: 1,
       },
-      edges: { node: { id: true, status: true } },
+      id: true,
+      status: true,
     },
-  } as any)) as any;
+  } as any).catch(() => null)) as any;
 
-  const existingId: string | undefined =
-    found?.calls?.edges?.[0]?.node?.id;
+  const existingId: string | undefined = found?.call?.id;
 
   const update: Record<string, unknown> = {
     status,
@@ -116,10 +115,11 @@ const handler = async (
       createCall: {
         __args: {
           data: {
+            name: 'Vexa meeting',
             vexaMeetingId: meetingId,
             vexaUrl: dashboardUrlFor(meetingId),
             status,
-            platform: mapPlatform(envelope.data.meeting.platform),
+            platform: mapPlatform(envelope.data.meeting.platform) as any,
             meetingUrl:
               envelope.data.meeting.constructed_meeting_url ?? undefined,
             ...update,

@@ -23,10 +23,12 @@ type CalendarEventRow = {
   id: string;
   title?: string;
   conferenceSolution?: string;
-  conferenceLinkUrl?: string;
+  conferenceLink?: { primaryLinkUrl?: string };
   startsAt?: string;
   endsAt?: string;
-  participants?: { email: string }[];
+  calendarEventParticipants?: {
+    edges: { node: { handle?: string } }[];
+  };
 };
 
 const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispatched: number; skipped: number }> => {
@@ -64,21 +66,27 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
             lte: new Date(now + horizonMs).toISOString(),
           },
         } as any,
-        limit: 200,
+        first: 200,
       },
       edges: {
         node: {
           id: true,
           title: true,
           conferenceSolution: true,
-          conferenceLinkUrl: true,
+          conferenceLink: { primaryLinkUrl: true } as any,
           startsAt: true,
           endsAt: true,
-          participants: { email: true } as any,
+          calendarEventParticipants: {
+            __args: { first: 50 } as any,
+            edges: { node: { handle: true } as any },
+          } as any,
         },
       },
     },
-  } as any)) as any;
+  } as any).catch((e: unknown) => {
+    console.warn('cron-dispatch: calendarEvents query failed:', e);
+    return null;
+  })) as any;
 
   const events: CalendarEventRow[] =
     eventsResp?.calendarEvents?.edges?.map((e: any) => e.node) ?? [];
@@ -92,17 +100,14 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
 
     // Already have a Call for this event? skip.
     const existing = (await client.query({
-      calls: {
-        __args: {
-          filter: { calendarEventId: { eq: event.id } } as any,
-          limit: 1,
-        },
-        edges: { node: { id: true, status: true } },
+      call: {
+        __args: { filter: { calendarEventId: { eq: event.id } } as any },
+        id: true,
       },
-    } as any)) as any;
-    if (existing?.calls?.edges?.length) continue;
+    } as any).catch(() => null)) as any;
+    if (existing?.call?.id) continue;
 
-    const parsed = parseMeetingUrl(event.conferenceLinkUrl ?? '');
+    const parsed = parseMeetingUrl(event.conferenceLink?.primaryLinkUrl ?? '');
     if (!parsed || !parsed.vexaPlatform) {
       // Not a Meet/Zoom/Teams URL — not eligible for autopilot.
       continue;
@@ -115,9 +120,9 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
       continue;
     }
 
-    const attendeeEmails = (event.participants ?? [])
-      .map((p) => p.email)
-      .filter(Boolean);
+    const attendeeEmails = (event.calendarEventParticipants?.edges ?? [])
+      .map((e) => e.node?.handle)
+      .filter((h): h is string => !!h && h.includes('@'));
 
     const decision = evaluatePolicy({
       attendeeEmails,
