@@ -56,13 +56,14 @@ export const CALENDAR_EVENT_CALLS_FIELD =
 
 // logic functions
 //
-// Single trigger: react to Twenty's calendarEvent.created database
-// event. No cron, no polling, no race with the calendar sync — runs
-// the moment a CalendarEvent row appears in the workspace.
-// Universal identifier preserved across the cron→database-event
-// rename so Twenty migrates the function in place.
-export const VEXA_ON_CALENDAR_EVENT_LF =
+// Two thin wrappers around lib/dispatch-handler. Twenty fires .created
+// when its sync inserts a new CalendarEvent row, .updated when an
+// existing row's fields change (e.g. user reschedules in Google).
+// Both call the same handler, which is idempotent on calendarEventId.
+export const VEXA_ON_CALENDAR_EVENT_CREATED_LF =
   '5e0a9d2c-0202-4c02-8c02-1d5f8e3c7d02';
+export const VEXA_ON_CALENDAR_EVENT_UPDATED_LF =
+  '5e0a9d2c-0203-4c03-8c03-1d5f8e3c7d03';
 
 // applicationVariables — workspace-level, edited in Twenty's Settings tab,
 // injected as process.env.<KEY> at logic-function runtime.
