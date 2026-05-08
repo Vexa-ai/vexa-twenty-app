@@ -1,6 +1,7 @@
-export const APP_DISPLAY_NAME = 'Vexa for Twenty';
+export const APP_DISPLAY_NAME = 'Vexa';
 export const APP_DESCRIPTION =
   'Auto-capture meetings into the right Opportunity via Vexa.';
+export const APP_LOGO_URL = 'https://dashboard.vexa.ai/icons/vexalight.svg';
 
 // app + role
 export const APPLICATION_UNIVERSAL_IDENTIFIER =

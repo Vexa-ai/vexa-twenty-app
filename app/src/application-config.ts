@@ -3,6 +3,7 @@ import { defineApplication } from 'twenty-sdk/define';
 import {
   APP_DESCRIPTION,
   APP_DISPLAY_NAME,
+  APP_LOGO_URL,
   APPLICATION_UNIVERSAL_IDENTIFIER,
   APPVAR_VEXA_API_BASE,
   APPVAR_VEXA_API_KEY,
@@ -14,6 +15,7 @@ export default defineApplication({
   universalIdentifier: APPLICATION_UNIVERSAL_IDENTIFIER,
   displayName: APP_DISPLAY_NAME,
   description: APP_DESCRIPTION,
+  logoUrl: APP_LOGO_URL,
   defaultRoleUniversalIdentifier: DEFAULT_ROLE_UNIVERSAL_IDENTIFIER,
 
   // Workspace-level variables. Edited in Twenty's Settings tab,
