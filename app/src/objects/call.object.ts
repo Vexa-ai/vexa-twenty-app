@@ -24,8 +24,7 @@ import {
 // because that decision happens here, not in Vexa.
 export enum CallDispatchOutcome {
   SCHEDULED = 'SCHEDULED', // bot dispatched to Vexa, vexa_url valid
-  SKIPPED = 'SKIPPED',     // policy rejected (blocklist / internal-only)
-  ERROR = 'ERROR',         // dispatch failed (Vexa API error / rate-limit)
+  ERROR = 'ERROR',         // dispatch failed (Vexa API error)
 }
 
 export enum CallProvider {
@@ -97,17 +96,10 @@ export default defineObject({
           color: 'green',
         },
         {
-          id: '5e0a9d2c-1002-4a02-8a02-1d5f8e3c7b92',
-          value: CallDispatchOutcome.SKIPPED,
-          label: 'Skipped',
-          position: 1,
-          color: 'gray',
-        },
-        {
           id: '5e0a9d2c-1003-4a03-8a03-1d5f8e3c7b93',
           value: CallDispatchOutcome.ERROR,
           label: 'Error',
-          position: 2,
+          position: 1,
           color: 'red',
         },
       ],
