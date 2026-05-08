@@ -40,11 +40,10 @@ Concretely, after install:
 
 - Twenty's existing Google/Microsoft calendar sync pulls events into
   the workspace.
-- Our app **mirrors** every CalendarEvent in `[now-90d, future)` as a
-  `Call` row, regardless of Vexa eligibility. Past events without a
-  Meet URL show as `NOT_ELIGIBLE`; future events with a Meet URL
-  show as `PENDING`; events Vexa already accepted show as
-  `SCHEDULED` with a `vexa_url`.
+- Our app **mirrors the next 20 upcoming CalendarEvents** as `Call`
+  rows. Future events without a Meet URL show as `NOT_ELIGIBLE`;
+  future events with a Meet URL show as `PENDING`; events Vexa
+  has accepted show as `SCHEDULED` with a `vexa_url`.
 - Calls auto-link to **Company** and **Opportunity** via the
   attendee participants Twenty already resolved.
 - **Just-in-time dispatch:** when an eligible meeting reaches its
@@ -81,7 +80,7 @@ Three design choices do most of the work.
 The earlier model only wrote a Call when we successfully dispatched a
 bot. That's wrong for the user experience: Calls = "what's on your
 calendar, and what we did about it" is more honest. So every
-CalendarEvent in the window gets a Call, with `dispatchOutcome`
+upcoming CalendarEvent (next 20) gets a Call, with `dispatchOutcome`
 classifying what happened:
 
 ```
@@ -89,8 +88,13 @@ classifying what happened:
                  waiting for the dispatch window
    SCHEDULED     bot dispatched, vexa_url valid
    ERROR         dispatch attempted, Vexa API error → dispatchReason
-   NOT_ELIGIBLE  past, cancelled, or no Meet URL → dispatchReason
+   NOT_ELIGIBLE  cancelled or no Meet URL → dispatchReason
 ```
+
+Why next-20 and not "everything": bounds rate-limit exposure
+(Twenty caps mutations at 100/min) and matches what a sales rep
+cares about right now. Past events and 21st+ are explicitly out of
+scope — clean ladder rung to add later if needed.
 
 ### 2. Just-in-time bot dispatch
 
@@ -242,8 +246,10 @@ self-hosted Vexa.
 ```
    T-∞     install completes; user pastes both keys in Settings
    T+0     cron fires (every 1 min)
-   T+0..1m mirror run: every CalendarEvent in [now-90d, future) →
-           Call upsert (PENDING / NOT_ELIGIBLE / SCHEDULED if 409)
+   T+0..1m mirror run: query the next 20 CalendarEvents
+           starting at or after now → Call upsert
+           (PENDING / NOT_ELIGIBLE / SCHEDULED if 409 reuses
+            existing meeting id)
    T-1m    eligible Call enters dispatch window
            → POST /bots → vexa returns id → Call.dispatchOutcome
              = SCHEDULED, vexa_url populated
@@ -253,8 +259,9 @@ self-hosted Vexa.
           live Vexa dashboard
 ```
 
-Cron horizon is 24h forward + 90d back from each tick. Idempotency:
-each calendarEventId maps to exactly one Call.
+Cron scope: next 20 future events per tick. Idempotency: each
+calendarEventId maps to exactly one Call (lookup is bounded:
+`calendarEventId IN [next-20 ids]`).
 
 ---
 
@@ -268,19 +275,20 @@ each calendarEventId maps to exactly one Call.
    token decoding cleanly in `validateApplicationToken`. Workaround
    is `TWENTY_API_KEY` paste; real fix needs root-cause investigation
    (or upstream PR).
-2. **Rate-limit on first run.** Fresh install on a workspace with
-   N existing calendar events fires N `createCall` mutations on the
-   first cron tick; Twenty caps at 100/min. First-pass mirror takes
-   several minutes to fully populate.
-3. **Reschedule produces duplicate Call rows.** Twenty's calendar
+2. **Reschedule produces duplicate Call rows.** Twenty's calendar
    sync creates a NEW `calendarEvent` row when a Google event is
    rescheduled (rather than updating in place), so we mirror both as
-   separate Calls. Idempotency fix needs to dedupe on `iCalUid`
-   instead of `calendarEventId`.
-4. **Vexa 409 currently surfaces as ERROR.** When we hit "active
-   meeting already exists for this platform+id" (recurring meetings
-   sharing one Meet URL), we should treat it as `SCHEDULED` and
-   re-use the existing Vexa meeting id.
+   separate Calls within the same next-20 window. Fix needs to
+   dedupe on `iCalUid` instead of `calendarEventId`.
+
+(Resolved in v0.7.0:)
+
+- ~~Rate-limit on first run.~~ Cron now scans only the next 20 future
+  events; per-tick mutation count is bounded ≤20, well under
+  Twenty's 100/min cap.
+- ~~Vexa 409 surfaces as ERROR.~~ 409 now treated as SCHEDULED with
+  the sibling meeting's `vexaMeetingId` (recurring meetings share
+  one bot per Meet URL).
 
 ### Out of scope for this release
 
@@ -311,29 +319,40 @@ each calendarEventId maps to exactly one Call.
 
 ## Definition of Done (current scope)
 
+Scope is **the next 20 future calendar events** on connected
+calendars. Past events and 21st+ future events are explicitly out of
+scope — they can be added later without changing the model.
+
 ```
    FUNCTIONAL — calendar mirror
-     ─ every CalendarEvent in [now-90d, future) maps to exactly
-       one Call row (no dupes, even on reschedule)
-     ─ "Scheduled start: future" filter returns every upcoming
-       meeting on connected calendars
+     ─ each of the next 20 upcoming CalendarEvents on connected
+       calendars maps to exactly one Call row (no duplicates)
+     ─ Calls list (sorted by Scheduled start ASC) shows those 20
+       and matches what's on the user's calendar
      ─ rescheduled CalendarEvent → Call.scheduledStart updates
      ─ cancelled CalendarEvent → Call.dispatchOutcome=NOT_ELIGIBLE
        with reason "cancelled"
-     ─ Calls auto-link to Company + Opportunity when overlap is
-       unambiguous
+     ─ event leaves the next-20 window (its start passes / earlier
+       events take its slot) → Call stays as historical record but
+       is no longer touched by the cron
+     ─ Calls auto-link to Company + Opportunity when an attendee
+       overlap is unambiguous
 
    FUNCTIONAL — Vexa dispatch
      ─ POST /bots fires at scheduledStart ± window only
+       (lead 1 min, tail 5 min) — never weeks ahead
      ─ success → SCHEDULED with vexa_meeting_id + vexa_url
-     ─ Vexa 409 → SCHEDULED reusing the existing meeting id
-     ─ Vexa other errors → ERROR with dispatchReason
+     ─ Vexa 409 (recurring meeting, bot already running for that
+       Meet URL) → SCHEDULED reusing the existing meeting id
+     ─ Vexa other errors → ERROR with dispatchReason populated
      ─ click vexa_url → live page on dashboard.vexa.ai
 
    OPERATIONAL
      ─ cron runs every minute without rate-limit errors
-     ─ on fresh install, mirror fully populates within ~5 min
-     ─ steady state: 0 mutations per tick (idempotency holds)
+       (per tick: 1 calendar query + 1 calls query + ≤20
+       mutations — well under Twenty's 100/min cap)
+     ─ steady state: 0 mutations per tick (idempotency holds —
+       lookup by calendarEventId IN [next-20 ids])
      ─ handler errors surfaced via APPLICATION_LOG_DRIVER=CONSOLE
        (not silent)
 
@@ -342,10 +361,21 @@ each calendarEventId maps to exactly one Call.
      2. operator schedules a Google Meet on a connected calendar
         5+ min in the future
      3. within ~6 min (Twenty sync 5 + our cron 1), Call(PENDING)
-        appears on /objects/calls
+        appears on /objects/calls — it's in the next-20 list
      4. at scheduledStart - 1 min, Call → SCHEDULED, vexa_url set
      5. operator joins the Meet; Vexa bot is in the room
      6. click "Open in Vexa" → real dashboard page with live state
+
+   EXPLICITLY OUT OF SCOPE
+     ─ events past today / events 21st+ on the future list
+     ─ historical backfill (the 90d-back window we dropped)
+     ─ the TWENTY_API_KEY admin-paste workaround
+       (marketplace blocker — needs root-cause on the application
+        token rejection)
+     ─ duplicate Calls when Twenty inserts a new calendarEvent row
+       on Google reschedule (idempotency keys on calendarEventId,
+       not iCalUid)
+     ─ in-CRM viewer, AI summaries, autonomous agent (later releases)
 ```
 
 ---
