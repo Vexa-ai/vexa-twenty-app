@@ -29,7 +29,13 @@ type CalendarEventRow = {
   startsAt?: string;
   endsAt?: string;
   calendarEventParticipants?: {
-    edges: { node: { handle?: string } }[];
+    edges: {
+      node: {
+        handle?: string;
+        personId?: string | null;
+        person?: { id?: string; companyId?: string | null } | null;
+      };
+    }[];
   };
 };
 
@@ -83,7 +89,13 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
           endsAt: true,
           calendarEventParticipants: {
             __args: { first: 50 } as any,
-            edges: { node: { handle: true } as any },
+            edges: {
+              node: {
+                handle: true,
+                personId: true,
+                person: { id: true, companyId: true } as any,
+              } as any,
+            },
           } as any,
         },
       },
@@ -125,7 +137,8 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
       continue;
     }
 
-    const attendeeEmails = (event.calendarEventParticipants?.edges ?? [])
+    const participants = event.calendarEventParticipants?.edges ?? [];
+    const attendeeEmails = participants
       .map((e) => e.node?.handle)
       .filter((h): h is string => !!h && h.includes('@'));
 
@@ -136,10 +149,16 @@ const handler = async (_payload: CronPayload): Promise<{ scanned: number; dispat
       skipInternalOnly: skipInternal,
     });
 
-    // Resolve attendees → Person → Company → Opportunity. We do this
-    // even for SKIPPED rows so the CRM still shows the deal context
-    // around what we *didn't* record (audit value).
-    const linkage = await resolveLinkage(client, attendeeEmails);
+    // Resolve participants → Company → Opportunity by following the
+    // links Twenty already populated (CalendarEventParticipant.person).
+    // No email lookup needed.
+    const linkage = await resolveLinkage(
+      client,
+      participants.map((e) => ({
+        personId: e.node?.personId ?? e.node?.person?.id ?? null,
+        companyId: e.node?.person?.companyId ?? null,
+      })),
+    );
 
     if (!decision.allow) {
       await client.mutation({

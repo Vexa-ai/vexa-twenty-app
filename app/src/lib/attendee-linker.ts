@@ -1,81 +1,50 @@
-// Attendee → Person → Company → Opportunity resolution.
+// Resolve a CalendarEvent's participants → Company → Opportunity.
 //
-// "Mapping is the value." A Call without these links is just metadata;
-// with them, every later release (viewer, skills, agent) is a single
-// GraphQL query away.
-//
-// Heuristic: tight + cheap, deliberately conservative. Ambiguous
-// cases (>1 candidate) leave fields null rather than guess wrong.
+// We don't re-match by email. Twenty's calendar sync already linked
+// each CalendarEventParticipant to a Person (or left it null when no
+// match exists). Just follow the join.
 
 import type { CoreApiClient } from 'twenty-client-sdk/core';
 
 // Stages we treat as "still in flight." CUSTOMER = won; everything
-// else is open. Twenty doesn't have a closed-lost stage.
+// else is open. Twenty has no closed-lost stage.
 const ACTIVE_OPP_STAGES = ['NEW', 'SCREENING', 'MEETING', 'PROPOSAL'];
+
+export type ParticipantPerson = {
+  personId: string | null;
+  companyId: string | null;
+};
 
 export type Linkage = {
   companyId: string | null;
   opportunityId: string | null;
-  matchedPersonIds: string[];
 };
 
+// Pick the company most participants belong to. Tie → null
+// (ambiguity is a feature; wrong-link is worse than no-link).
 export const resolveLinkage = async (
   client: CoreApiClient,
-  attendeeEmails: string[],
+  participants: ParticipantPerson[],
 ): Promise<Linkage> => {
-  if (attendeeEmails.length === 0) {
-    return { companyId: null, opportunityId: null, matchedPersonIds: [] };
-  }
-
-  // Look up People by primaryEmail. We accept a per-email miss
-  // silently — the right behavior is "link what we can" rather than
-  // "fail the whole resolution."
-  const peoplePerEmail = await Promise.all(
-    attendeeEmails.map((email) =>
-      (client.query({
-        people: {
-          __args: {
-            filter: { emails: { primaryEmail: { eq: email } } } as any,
-            first: 1,
-          } as any,
-          edges: { node: { id: true, companyId: true } as any },
-        },
-      } as any) as Promise<any>).catch(() => null),
-    ),
-  );
-
-  const matched = peoplePerEmail
-    .map((r) => r?.people?.edges?.[0]?.node)
-    .filter((p) => p && p.id) as { id: string; companyId: string | null }[];
-
-  if (matched.length === 0) {
-    return { companyId: null, opportunityId: null, matchedPersonIds: [] };
-  }
-
-  // Majority vote on companyId across matched attendees.
-  const companyVotes = new Map<string, number>();
-  for (const p of matched) {
+  const votes = new Map<string, number>();
+  for (const p of participants) {
     if (!p.companyId) continue;
-    companyVotes.set(p.companyId, (companyVotes.get(p.companyId) ?? 0) + 1);
+    votes.set(p.companyId, (votes.get(p.companyId) ?? 0) + 1);
   }
-  const companyId = pickMajority(companyVotes);
+  const companyId = pickMajority(votes);
 
   if (!companyId) {
-    return {
-      companyId: null,
-      opportunityId: null,
-      matchedPersonIds: matched.map((p) => p.id),
-    };
+    return { companyId: null, opportunityId: null };
   }
 
-  // Find an open Opportunity for that company. Set the link only if
-  // there's exactly one — ambiguity is a feature, not a bug.
   const opps = (await (client.query({
     opportunities: {
       __args: {
         filter: {
-          companyId: { eq: companyId },
-          stage: { in: ACTIVE_OPP_STAGES },
+          and: [
+            { companyId: { eq: companyId } },
+            { stage: { in: ACTIVE_OPP_STAGES } },
+          ],
         } as any,
         first: 5,
       } as any,
@@ -87,11 +56,7 @@ export const resolveLinkage = async (
     opps?.opportunities?.edges ?? [];
   const opportunityId = oppEdges.length === 1 ? oppEdges[0].node.id : null;
 
-  return {
-    companyId,
-    opportunityId,
-    matchedPersonIds: matched.map((p) => p.id),
-  };
+  return { companyId, opportunityId };
 };
 
 const pickMajority = (votes: Map<string, number>): string | null => {
@@ -107,6 +72,5 @@ const pickMajority = (votes: Map<string, number>): string | null => {
       tied = true;
     }
   }
-  // Tie → no winner. Conservative default.
   return tied ? null : bestKey;
 };
