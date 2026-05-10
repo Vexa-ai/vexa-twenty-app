@@ -1088,6 +1088,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@vexaai/twenty-app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@vexaai/twenty-app@workspace:."
+  dependencies:
+    "@types/node": "npm:^24.7.2"
+    "@types/react": "npm:^19.0.0"
+    oxlint: "npm:^0.16.0"
+    react: "npm:^19.0.0"
+    react-dom: "npm:^19.0.0"
+    twenty-client-sdk: "npm:^2.0.0"
+    twenty-sdk: "npm:^2.0.0"
+    typescript: "npm:^5.9.3"
+    vite-tsconfig-paths: "npm:^4.2.1"
+    vitest: "npm:^3.1.1"
+  peerDependencies:
+    twenty-client-sdk: ">=2.0.0"
+    twenty-sdk: ">=2.0.0"
+  peerDependenciesMeta:
+    twenty-client-sdk:
+      optional: true
+    twenty-sdk:
+      optional: true
+  languageName: unknown
+  linkType: soft
+
 "@vitest/expect@npm:3.2.4":
   version: 3.2.4
   resolution: "@vitest/expect@npm:3.2.4"
@@ -3752,7 +3777,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"twenty-client-sdk@npm:2.3.0":
+"twenty-client-sdk@npm:2.3.0, twenty-client-sdk@npm:^2.0.0":
   version: 2.3.0
   resolution: "twenty-client-sdk@npm:2.3.0"
   dependencies:
@@ -3764,7 +3789,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"twenty-sdk@npm:2.3.0":
+"twenty-sdk@npm:^2.0.0":
   version: 2.3.0
   resolution: "twenty-sdk@npm:2.3.0"
   dependencies:
@@ -3916,23 +3941,6 @@ __metadata:
   checksum: 10c0/b75657b74e4d17552bd88e0c2857020fbab34a4d091dc058db18c470e7da0336067e72c130b3358e3321ac0a6ff11c0b92b67a382318a3705ad5d57de7ff3262
   languageName: node
   linkType: hard
-
-"vexa-for-twenty@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "vexa-for-twenty@workspace:."
-  dependencies:
-    "@types/node": "npm:^24.7.2"
-    "@types/react": "npm:^19.0.0"
-    oxlint: "npm:^0.16.0"
-    react: "npm:^19.0.0"
-    react-dom: "npm:^19.0.0"
-    twenty-client-sdk: "npm:2.3.0"
-    twenty-sdk: "npm:2.3.0"
-    typescript: "npm:^5.9.3"
-    vite-tsconfig-paths: "npm:^4.2.1"
-    vitest: "npm:^3.1.1"
-  languageName: unknown
-  linkType: soft
 
 "vite-node@npm:3.2.4":
   version: 3.2.4

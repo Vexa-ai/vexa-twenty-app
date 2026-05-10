@@ -101,14 +101,15 @@ const handler = async (
     return { scanned: 0, created: 0, updated: 0, dispatched: 0, errors: 0 };
   }
 
-  // The runtime injects TWENTY_APP_ACCESS_TOKEN + TWENTY_API_KEY both
-  // pointing at the application-scoped JWT, but it's currently
-  // rejected on /graphql workspace reads with "Authentication is
-  // required". Workaround: take TWENTY_API_KEY off the env if the
-  // operator pasted a long-lived workspace admin key, so SDK's
-  // fallback chain (TWENTY_APP_ACCESS_TOKEN → TWENTY_API_KEY) lands
-  // on theirs. Hard-overwrite via setAuthorizationToken below to be
-  // sure.
+  // The runtime injects TWENTY_APP_ACCESS_TOKEN (type=APPLICATION_ACCESS,
+  // ~30 min TTL) but Twenty's /graphql workspace-read endpoint rejects
+  // it with "Authentication is required" — verified empirically on
+  // crm.vexa.ai with full role permissions granted. Until the platform
+  // accepts APPLICATION_ACCESS tokens on /graphql, the operator pastes
+  // a workspace API key (mint at Settings → APIs & Webhooks, role
+  // Admin) into the TWENTY_API_KEY applicationVariable. Hard-overwrite
+  // via setAuthorizationToken so the SDK doesn't fall back to the
+  // injected app token.
   const adminKey = process.env.TWENTY_API_KEY ?? '';
   delete (process.env as Record<string, string | undefined>).TWENTY_APP_ACCESS_TOKEN;
   const client = new CoreApiClient();
@@ -117,7 +118,70 @@ const handler = async (
   }
   const vexa = new VexaClient(apiKey);
 
+  // Webhook config — opt-in. When VEXA_WEBHOOK_SECRET is set, every
+  // POST /bots tells Vexa to deliver lifecycle events back to
+  // /s/vexa-webhook on this Twenty server, signed HMAC-SHA256 with
+  // the shared secret. The webhook handler reconciles Call rows in
+  // near-real-time. If unset, dispatch omits webhook headers and
+  // Vexa falls back to the user's account-level default (which may
+  // be empty / webhook.site / wherever the operator set it).
+  const webhookSecret = process.env.VEXA_WEBHOOK_SECRET ?? '';
+  const twentyApiUrl = process.env.TWENTY_API_URL ?? '';
+  const webhookConfig =
+    webhookSecret && twentyApiUrl
+      ? {
+          url: `${twentyApiUrl.replace(/\/$/, '')}/s/vexa-webhook`,
+          secret: webhookSecret,
+          events: ['meeting.completed', 'bot.failed'],
+        }
+      : undefined;
+
   const now = new Date();
+
+  // 0. Build the set of "self" email addresses to omit from attendee
+  //    lists. The user shouldn't appear as an attendee on their own
+  //    meetings — that's noise. Two sources, both auto-detected:
+  //
+  //    a) workspaceMembers.userEmail — the login email of every
+  //       member of this workspace.
+  //    b) connectedAccounts.handle — every email address the user
+  //       has connected as a calendar/inbox source. This is the one
+  //       that catches secondary calendars (e.g. a personal gmail
+  //       attached alongside the work account).
+  //
+  //    No paste-list, no env var: every "me" address Twenty knows
+  //    about is included automatically.
+  const selfEmails = new Set<string>();
+  const [wmResp, caResp] = await Promise.all([
+    client
+      .query({
+        workspaceMembers: {
+          __args: { first: 50 } as any,
+          edges: { node: { userEmail: true } as any },
+        },
+      } as any)
+      .catch(() => null),
+    client
+      .query({
+        connectedAccounts: {
+          __args: { first: 50 } as any,
+          edges: { node: { handle: true } as any },
+        },
+      } as any)
+      .catch(() => null),
+  ]) as any[];
+  for (const e of wmResp?.workspaceMembers?.edges ?? []) {
+    const email = e.node?.userEmail;
+    if (typeof email === 'string' && email.includes('@')) {
+      selfEmails.add(email.trim().toLowerCase());
+    }
+  }
+  for (const e of caResp?.connectedAccounts?.edges ?? []) {
+    const handle = e.node?.handle;
+    if (typeof handle === 'string' && handle.includes('@')) {
+      selfEmails.add(handle.trim().toLowerCase());
+    }
+  }
 
   // 1. Pull the next N upcoming events. Single query, sorted ASC,
   //    bounded — keeps mutation count per tick well under Twenty's
@@ -294,6 +358,10 @@ const handler = async (
       if (newCallId) {
         for (const p of participants) {
           const handle = p.node?.handle ?? '';
+          // Skip self — workspace member or operator-listed account.
+          if (handle && selfEmails.has(handle.trim().toLowerCase())) {
+            continue;
+          }
           const calDisplayName = p.node?.displayName ?? '';
           const personId =
             p.node?.personId ?? p.node?.person?.id ?? null;
@@ -378,6 +446,7 @@ const handler = async (
         vexa,
         parsed.vexaPlatform,
         parsed.nativeId,
+        webhookConfig,
       );
       // Re-find the Call id (may have just been created above).
       const callId =

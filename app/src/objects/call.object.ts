@@ -4,6 +4,8 @@ import {
   CALL_ATTENDEE_EMAILS_FIELD,
   CALL_DISPATCH_OUTCOME_FIELD,
   CALL_DISPATCH_REASON_FIELD,
+  CALL_DURATION_SEC_FIELD,
+  CALL_LAST_ENRICHED_AT_FIELD,
   CALL_MEETING_URL_FIELD,
   CALL_NAME_FIELD,
   CALL_PLATFORM_FIELD,
@@ -11,6 +13,7 @@ import {
   CALL_SCHEDULED_END_FIELD,
   CALL_SCHEDULED_START_FIELD,
   CALL_UNIVERSAL_IDENTIFIER,
+  CALL_VEXA_COMPLETION_REASON_FIELD,
   CALL_VEXA_MEETING_ID_FIELD,
   CALL_VEXA_URL_FIELD,
 } from 'src/constants/universal-identifiers';
@@ -232,6 +235,40 @@ export default defineObject({
       description:
         'Raw list of attendee emails captured from the calendar event. Person resolution is left for the agent (later release).',
       icon: 'IconAt',
+    },
+    // Post-meeting metadata, hoisted from Vexa at enrichment time.
+    // Single-value identity-of-the-call data only — never transcript
+    // content. Pointer-only ownership boundary preserved.
+    {
+      universalIdentifier: CALL_DURATION_SEC_FIELD,
+      type: FieldType.NUMBER,
+      name: 'durationSec',
+      label: 'Duration (s)',
+      description:
+        "Meeting duration in seconds, end_time - start_time from Vexa. Empty if the meeting hasn't completed or Vexa has no record.",
+      icon: 'IconClock',
+      isNullable: true,
+      defaultValue: null,
+    },
+    {
+      universalIdentifier: CALL_VEXA_COMPLETION_REASON_FIELD,
+      type: FieldType.TEXT,
+      name: 'vexaCompletionReason',
+      label: 'Completion reason',
+      description:
+        "Why the bot left, hoisted from Vexa's completion_reason. E.g. 'completed', 'no_participants', 'bot_failed'.",
+      icon: 'IconFlag',
+    },
+    {
+      universalIdentifier: CALL_LAST_ENRICHED_AT_FIELD,
+      type: FieldType.DATE_TIME,
+      name: 'lastEnrichedAt',
+      label: 'Last enriched',
+      description:
+        'When the backfill last successfully hit Vexa for this Call. Used as an idempotency checkpoint so re-runs skip recent rows.',
+      icon: 'IconRefresh',
+      isNullable: true,
+      defaultValue: null,
     },
   ],
 });

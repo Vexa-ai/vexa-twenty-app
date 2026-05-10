@@ -38,6 +38,40 @@ export const CALL_DISPATCH_REASON_FIELD =
 export const CALL_ATTENDEE_EMAILS_FIELD =
   '5e0a9d2c-000c-4a0c-8a0c-1d5f8e3c7b0c';
 
+// Pointer-only post-meeting metadata. Twenty stores duration +
+// completion reason (single short values, identity-of-the-call data)
+// and an enrichment checkpoint. We deliberately do NOT mirror
+// transcript / segments / recordings — that content stays in Vexa,
+// accessed via vexa_url. See README "pure pointer, not mirror".
+export const CALL_DURATION_SEC_FIELD =
+  '007eea0a-a5ee-40e6-9716-c76d650ae8a8';
+export const CALL_VEXA_COMPLETION_REASON_FIELD =
+  '07ee3a2e-6684-45de-9b28-2dc518d6159f';
+export const CALL_LAST_ENRICHED_AT_FIELD =
+  'd6fbb3a8-fa30-4cfe-8345-0c62fca4aa26';
+
+// Backfill logic function — one-shot http-route trigger that scans
+// past CalendarEvents and ensures each has a Call row pointing at
+// the right Vexa meeting (if Vexa has one for that URL).
+export const VEXA_BACKFILL_LF =
+  '9ec7bd33-db24-488c-acf6-b5b03247842a';
+
+// Vexa webhook receiver — POST /s/vexa-webhook. Auth is HMAC
+// (X-Webhook-Signature using VEXA_WEBHOOK_SECRET); Twenty's own
+// isAuthRequired is false because Vexa-side requests carry no Twenty
+// credentials, only the user-supplied webhook secret.
+export const VEXA_WEBHOOK_LF =
+  'e3349e42-4769-424e-a1bf-98fc7c47e1b0';
+
+// Per-meeting webhook secret. When set, the cron passes it on POST
+// /bots via X-User-Webhook-Secret so Vexa signs delivery payloads
+// HMAC-SHA256("{ts}." + body, secret). The webhook receiver verifies
+// the signature against the same value. If unset, the cron omits
+// webhook config and Vexa falls back to the account-level default
+// (or no delivery).
+export const APPVAR_VEXA_WEBHOOK_SECRET =
+  'e4988e27-c3d2-4423-ad32-6ba53e2d4423';
+
 // relation fields (one pair per related standard object)
 export const CALL_OPPORTUNITY_FIELD =
   '5e0a9d2c-0101-4b01-8b01-1d5f8e3c7c01';
@@ -72,15 +106,13 @@ export const APPVAR_VEXA_API_BASE =
 export const APPVAR_VEXA_DASHBOARD_BASE =
   '5e0a9d2c-0303-4d03-8d03-1d5f8e3c7e03';
 // TWENTY_API_KEY shadows the runtime-injected applicationAccessToken
-// because Twenty's app-token auth currently rejects /graphql reads on
-// workspace-bound objects with "Authentication is required". Until
-// that's understood, we let the operator paste a long-lived workspace
-// admin API key (Settings → APIs & Webhooks) — CoreApiClient reads
-// TWENTY_API_KEY from env and the user-defined applicationVariable
-// overrides the runtime default per Twenty's spread order.
+// because Twenty's /graphql endpoint rejects type=APPLICATION_ACCESS
+// tokens with "Authentication is required" even when the role grants
+// the requested permissions. Operator pastes a long-lived workspace
+// admin API key (Settings → APIs & Webhooks). Drop the variable when
+// the platform fixes the auth gate.
 export const APPVAR_TWENTY_API_KEY =
   '5e0a9d2c-0304-4d04-8d04-1d5f8e3c7e04';
-
 // view + navigation
 export const ALL_CALLS_VIEW =
   '5e0a9d2c-0401-4e01-8e01-1d5f8e3c7f01';

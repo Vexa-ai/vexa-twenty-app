@@ -1,24 +1,49 @@
 {
-  "name": "vexa-for-twenty",
-  "version": "0.8.1",
+  "name": "@vexaai/twenty-app",
+  "version": "0.11.0",
   "license": "MIT",
-  "engines": {
-    "node": "^24.5.0",
-    "npm": "please-use-yarn",
-    "yarn": ">=4.0.2"
+  "description": "Auto-capture meetings into the right Opportunity via Vexa. Mirrors your calendar into Twenty Calls and dispatches a Vexa bot just-in-time when each meeting starts.",
+  "author": "Vexa <support@vexa.ai> (https://vexa.ai)",
+  "homepage": "https://github.com/vexa-ai/vexa-twenty-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vexa-ai/vexa-twenty-app.git",
+    "directory": "app"
   },
-  "keywords": [],
-  "packageManager": "yarn@4.9.2",
+  "bugs": {
+    "url": "https://github.com/vexa-ai/vexa-twenty-app/issues"
+  },
+  "keywords": [
+    "twenty-app",
+    "twenty",
+    "crm",
+    "vexa",
+    "meetings",
+    "transcription",
+    "calendar"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "twenty": "twenty",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint --fix -c .oxlintrc.json .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "publish:portable": "yarn twenty build && node scripts/strip-output-package-json.mjs && cd .twenty/output && npm publish"
   },
-  "dependencies": {
-    "twenty-client-sdk": "2.3.0",
-    "twenty-sdk": "2.3.0"
+  "peerDependencies": {
+    "twenty-client-sdk": ">=2.0.0",
+    "twenty-sdk": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "twenty-client-sdk": {
+      "optional": true
+    },
+    "twenty-sdk": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^24.7.2",
@@ -26,8 +51,11 @@
     "oxlint": "^0.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "twenty-client-sdk": "^2.0.0",
+    "twenty-sdk": "^2.0.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^4.2.1",
     "vitest": "^3.1.1"
-  }
+  },
+  "packageManager": "yarn@4.9.2"
 }

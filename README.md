@@ -71,6 +71,118 @@ Concretely, after install:
 We're validating one thing: **does the calendar-bound Vexa autopilot
 become something a sales team actually relies on?**
 
+## Architecture
+
+```
+                                  ┌─────────────────────────────────────────────────┐
+                                  │                  USER'S BROWSER                  │
+                                  │  Google Calendar  /  Google Meet  /  Twenty UI   │
+                                  └────────────────┬────────────────────┬────────────┘
+                                                   │                    │
+                                  calendar invite  │                    │ /settings/applications/...
+                                       events      │                    │ /objects/calls
+                                                   ▼                    ▼
+   ┌────────────────────────┐         ┌──────────────────────┐    ┌─────────────────────┐
+   │       VEXA CLOUD        │         │    GOOGLE WORKSPACE  │    │    TWENTY CRM        │
+   │  (vexa-platform repo)   │         │   Calendar / Meet     │    │                      │
+   │                         │         │                       │    │                      │
+   │ ┌─────────────────────┐ │         │  Calendar OAuth ◀─────┼────┤ Account integration  │
+   │ │ api-gateway         │ │         │  (per workspace mbr)  │    │ (per workspaceMember)│
+   │ │  POST /bots         │◀┼─────────┼─── join URL bot ─────▶│    │                      │
+   │ │  GET /transcripts/  │ │         │   into meeting        │    │  ┌─────────────────┐ │
+   │ │  GET /bots/id/      │ │         │                       │    │  │ calendar-sync   │ │
+   │ └────────┬────────────┘ │         └──────┬────────────────┘    │  │ (Twenty native) │ │
+   │          │              │                │ pulls events         │  └────────┬────────┘ │
+   │ ┌────────▼────────────┐ │                └─────────────────────▶│           │          │
+   │ │ meeting-api         │ │                                       │           ▼          │
+   │ │  meetings table     │ │                                       │  ┌─────────────────┐ │
+   │ │  api_tokens         │ │                                       │  │ CalendarEvent    │ │
+   │ │  transcriptions     │ │                                       │  │   (standard obj) │ │
+   │ │  recordings         │ │                                       │  └────────┬────────┘ │
+   │ │  users.data.webhook │ │                                       │           │          │
+   │ └─────────────────────┘ │                                       └───────────┼──────────┘
+   │                         │                                                   │
+   │ ┌─────────────────────┐ │                                                   │
+   │ │ vexa-bot            │ │            ┌──────────────────────────────────────┘
+   │ │ (joins Meet/Zoom)   │ │            │
+   │ └─────────────────────┘ │            ▼
+   │                         │   ┌───────────────────────────────────────────────┐
+   │ Postgres (Akamai)       │   │       VEXA-FOR-TWENTY APP                     │
+   │  meetings.platform_     │   │       (@vexaai/twenty-app)                    │
+   │  specific_id ◀──────────┼───┼─ matches ─ Call.meetingUrl native id ▶        │
+   │                         │   │                                                │
+   └─────────────────────────┘   │  ┌──────────────────────────────────────┐    │
+                                  │  │  Logic functions (run in worker pod) │    │
+                                  │  │                                       │    │
+                                  │  │  vexa-cron-dispatch (cron * * * * *) │    │
+                                  │  │   • scan next 20 future events       │    │
+                                  │  │   • dispatch bot 1min pre-start      │    │
+                                  │  │   • POST /bots, store vexaMeetingId  │    │
+                                  │  │                                       │    │
+                                  │  │  vexa-backfill (POST /s/backfill)    │    │
+                                  │  │   • scan last N days CalendarEvents   │    │
+                                  │  │   • ensure Call row + Vexa pointer    │    │
+                                  │  │   • GET /transcripts/<platform>/<id> │    │
+                                  │  │   • hoist duration + completion       │    │
+                                  │  │                                       │    │
+                                  │  │  vexa-webhook (POST /s/vexa-webhook) │    │
+                                  │  │   • HMAC-verify X-Webhook-Signature   │    │
+                                  │  │   • react to meeting.completed +     │    │
+                                  │  │     bot.failed in near-real-time     │    │
+                                  │  │   • refresh Call without cron lag    │    │
+                                  │  └──────────────┬───────────────────────┘    │
+                                  │                 │                              │
+                                  │                 ▼                              │
+                                  │  ┌──────────────────────────────────────┐    │
+                                  │  │  Custom objects                       │    │
+                                  │  │                                       │    │
+                                  │  │  Call ──┬─→ Opportunity              │    │
+                                  │  │         ├─→ Company                  │    │
+                                  │  │         ├─→ CalendarEvent (1:1)      │    │
+                                  │  │         └─→ CallAttendee[] ─→ Person │    │
+                                  │  │                                       │    │
+                                  │  │  Pointer fields:                      │    │
+                                  │  │   vexaMeetingId (FK → Vexa)          │    │
+                                  │  │   vexaUrl (deep link) ──────┐        │    │
+                                  │  │                              │        │    │
+                                  │  │  Hoisted scalars (identity,  │        │    │
+                                  │  │  never content):             │        │    │
+                                  │  │   durationSec                │        │    │
+                                  │  │   vexaCompletionReason       │        │    │
+                                  │  │   lastEnrichedAt             │        │    │
+                                  │  └──────────────────────────────┼────────┘    │
+                                  │                                  │             │
+                                  │  applicationVariables (Settings) │             │
+                                  │   • VEXA_API_KEY (req'd)         │             │
+                                  │   • VEXA_API_BASE                │             │
+                                  │   • VEXA_DASHBOARD_BASE          │             │
+                                  │   • VEXA_WEBHOOK_SECRET (opt'l)  │             │
+                                  │   • TWENTY_API_KEY (workaround   │             │
+                                  │     for upstream #20423)         │             │
+                                  └──────────────────────────────────┼─────────────┘
+                                                                     │
+                                                  user clicks vexaUrl│
+                                                                     ▼
+                                                        ┌──────────────────────┐
+                                                        │  dashboard.vexa.ai   │
+                                                        │  /meetings/<id>      │
+                                                        │  (transcript, audio, │
+                                                        │   participants live  │
+                                                        │   in Vexa Cloud)     │
+                                                        └──────────────────────┘
+```
+
+**Ownership boundary** — Twenty stores the *mapping* (which Person attended which Call, which Opportunity it belongs to, when, where, dispatch state, a pointer to Vexa, plus a few hoisted identity scalars). Vexa stores the *content* (transcript segments, audio/video, speaker diarization, summaries). To see what was said, click `Open in Vexa`. Transcript content is never copied into Twenty; the integration is pure pointer.
+
+**Two write paths, one read path:**
+
+| Path | Frequency | Triggered by | Purpose |
+|---|---|---|---|
+| `vexa-cron-dispatch` | every minute | cron `* * * * *` | scan next 20 future calendar events, dispatch bot 1min before start, mirror into Calls |
+| `vexa-backfill` | manual | `POST /s/backfill { sinceDays }` | one-shot scan of past CalendarEvents → ensure each has a Call row + Vexa pointer |
+| `vexa-webhook` | event-driven | `POST /s/vexa-webhook` from Vexa | HMAC-verified `meeting.completed` / `bot.failed` → reconcile Call row in seconds |
+| click-through | on-demand | user clicks `vexaUrl` in a Call | direct to `dashboard.vexa.ai/meetings/<id>` for transcript / audio |
+
 ## How
 
 Three design choices do most of the work.

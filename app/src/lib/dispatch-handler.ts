@@ -22,11 +22,13 @@ export const dispatchVexaBot = async (
   vexa: VexaClient,
   platform: VexaPlatform,
   nativeMeetingId: string,
+  webhook?: { url: string; secret: string; events: string[] },
 ): Promise<DispatchResult> => {
   try {
     const r = await vexa.dispatchBot({
       platform,
       native_meeting_id: nativeMeetingId,
+      ...(webhook ? { webhook } : {}),
     });
     return { ok: true, meetingId: r.id, url: vexa.dashboardUrl(r.id) };
   } catch (err) {

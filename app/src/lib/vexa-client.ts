@@ -12,6 +12,16 @@ export type DispatchBotInput = {
   native_meeting_id: string;
   language?: string;
   bot_name?: string;
+  // Optional per-meeting webhook override. Passed via X-User-Webhook-*
+  // headers on POST /bots — Vexa persists them in meeting.data and
+  // signs deliveries HMAC-SHA256("{ts}." + body, secret). Setting these
+  // here overrides the user's account-default webhook for this meeting
+  // only. Drop the field to leave the account default in place.
+  webhook?: {
+    url: string;
+    secret: string;
+    events: string[]; // e.g. ['meeting.completed', 'bot.failed']
+  };
 };
 
 export type DispatchBotResult = {
@@ -19,6 +29,22 @@ export type DispatchBotResult = {
   id: number;
   bot_id?: string;
   status: string;
+};
+
+// Subset of Vexa's TranscriptionResponse we hoist into Twenty. We
+// intentionally ignore segments/recordings/notes — those stay in
+// Vexa per ownership boundary.
+type VexaTranscriptResponse = {
+  id: number;
+  start_time?: string | null;
+  end_time?: string | null;
+  data?: { completion_reason?: string | null } | null;
+};
+
+export type VexaMeetingMeta = {
+  id: number;
+  durationSec: number | null;
+  completionReason: string | null;
 };
 
 export class VexaClient {
@@ -32,14 +58,61 @@ export class VexaClient {
     }
   }
 
+  // Backfill lookup. Vexa returns a TranscriptionResponse that
+  // includes segments[], recordings[], notes, and the meeting's
+  // identity fields. We deliberately read ONLY identity/metadata
+  // — id, start_time, end_time, data.completion_reason — so the
+  // transcript content stays in Vexa per the pointer-architecture
+  // ownership boundary. 404 means Vexa has no meeting for this URL,
+  // which is the most common case for past calendar events.
+  async getMeetingMetaByUrl(
+    platform: VexaPlatform,
+    nativeMeetingId: string,
+  ): Promise<VexaMeetingMeta | null> {
+    const res = await fetch(
+      `${this.baseUrl}/transcripts/${platform}/${encodeURIComponent(nativeMeetingId)}`,
+      { headers: { 'X-API-Key': this.apiKey } },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '<unreadable>');
+      throw new Error(
+        `Vexa GET /transcripts failed: ${res.status} ${res.statusText} — ${body}`,
+      );
+    }
+    const json = (await res.json()) as VexaTranscriptResponse;
+    const start = json.start_time ? Date.parse(json.start_time) : NaN;
+    const end = json.end_time ? Date.parse(json.end_time) : NaN;
+    const durationSec =
+      Number.isFinite(start) && Number.isFinite(end)
+        ? Math.max(0, Math.round((end - start) / 1000))
+        : null;
+    return {
+      id: json.id,
+      durationSec,
+      completionReason: json.data?.completion_reason ?? null,
+    };
+  }
+
   async dispatchBot(input: DispatchBotInput): Promise<DispatchBotResult> {
+    const { webhook, ...body } = input;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-API-Key': this.apiKey,
+    };
+    if (webhook?.url) {
+      headers['X-User-Webhook-URL'] = webhook.url;
+      if (webhook.secret) {
+        headers['X-User-Webhook-Secret'] = webhook.secret;
+      }
+      if (webhook.events?.length) {
+        headers['X-User-Webhook-Events'] = webhook.events.join(',');
+      }
+    }
     const res = await fetch(`${this.baseUrl}/bots`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': this.apiKey,
-      },
-      body: JSON.stringify(input),
+      headers,
+      body: JSON.stringify(body),
     });
 
     if (res.status === 429) {
